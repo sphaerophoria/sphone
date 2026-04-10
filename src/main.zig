@@ -1,9 +1,9 @@
 const std = @import("std");
 const sphtud = @import("sphtud");
+const sip = @import("sip.zig");
 
 const Events = struct {
     const accept = 1;
-    const source_read = 2;
     const new_read = 3;
 };
 
@@ -62,36 +62,65 @@ const ActiveConnection = struct {
 };
 
 pub fn main() !void {
-    //var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    //const alloc = gpa.allocator();
-
-
-    const addr = std.net.Address.initIp4(.{127, 0, 0, 1}, 5062);
-    const s = try std.net.tcpConnectToAddress(addr);
-
-    try sphtud.event.setNonblock(s.handle);
-
-    var w_buf: [4096]u8 = undefined;
-    var sw = s.writer(&w_buf);
-    const w = &sw.interface;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const alloc = gpa.allocator();
 
     const in_addr = std.net.Address.initIp4(.{127, 0, 0, 1}, 5060);
     var in_socket = try in_addr.listen(.{
         .reuse_address = true,
     });
 
-    try w.writeAll(
-        "INVITE sip:mick-terminal@127.0.0.1:5062 SIP/2.0\r\n" ++
-        "Via: SIP/2.0/TCP 127.0.0.1:5060;branch=z9hG4bK776asdhds\r\n" ++
-        "To: mick-terminal <sip:mick-terminal@127.0.0.1:5062>\r\n" ++
-        "From: mick <sip:mick@127.0.0.1>;tag=1928301774\r\n" ++
-        "Call-ID: 3YhCFaopvB\r\n" ++
-        "CSeq: 314159 INVITE\r\n" ++
-        "Content-Type: application/sdp\r\n" ++
-        "Content-Length: 517\r\n" ++
-        "Contact: <sip:streamer@127.0.0.1;transport=tcp>;+org.linphone.specs=\"lime\"\r\n" ++
-        "\r\n" ++
-        "v=0\r\n" ++
+    // FIXME: Maybe 1 MTU is good enough?
+    var transport: sip.Transport(100, 4096) = undefined;
+    transport.initPinned();
+
+    var transaction_manager: sip.TransactionManager(100) = undefined;
+    transaction_manager.initPinned();
+
+    // IO subsystem
+    // when there is data available on connection X call me with number 50
+
+    // FIXME: Req needs to come from the transaction manager
+    // Transaction manager needs to generate branch param and tie it back??
+    // OR at least mark the branch parameter
+
+    var rng = blk: {
+        var seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
+        try std.posix.getrandom(&seed);
+        break :blk std.Random.DefaultCsprng.init(seed);
+    };
+
+    // Transaction
+    //   * transaction state
+    //   * transaction ID -- branch + cseq method
+    //
+    const branch_id = sip.genBranchId(rng.random());
+    std.debug.print("branch_id: {s}\n", .{branch_id});
+
+    // FIXME: Wrap invite creation somewhere? Maybe a higher level Sip
+    try transaction_manager.createRequest(&branch_id, .invite);
+
+    // FIXME: Do something else
+    var via_buf: [4096]u8 = undefined;
+    const via = try std.fmt.bufPrint(&via_buf, "SIP/2.0/TCP 127.0.0.1:5060;branch={s}", .{&branch_id});
+
+    var req = try transport.makeRequest(alloc, .{
+        .method = "INVITE",
+        .uri = "sip:mick-terminal@127.0.0.1:5062",
+        .via = via,
+        .to = "mick-terminal <sip:mick-terminal@127.0.0.1:5062>",
+        .from = "mick <sip:mick@127.0.0.1>;tag=1928301774",
+        .call_id = "3YhCFaopvB",
+        .cseq = "314159 INVITE",
+        // FIXME: max forwards is claimed to be reuqired, but our linphone invite does not have it
+        .max_forwards = "70",
+    });
+
+    // Genreate branch id + method
+    // Feed to transaction manager
+    // Send via transport
+
+    const body = "v=0\r\n" ++
         "o=streamer 416 78 IN IP4 127.0.0.1\r\n" ++
         "s=Talk\r\n" ++
         "c=IN IP4 127.0.0.1\r\n" ++
@@ -110,10 +139,16 @@ pub fn main() !void {
         "a=rtpmap:100 telephone-event/8000\r\n" ++
         "a=rtcp:56541\r\n" ++
         "a=rtcp-fb:* trr-int 5000\r\n" ++
-        "a=rtcp-fb:* ccm tmmbr\r\n"
-    );
+        "a=rtcp-fb:* ccm tmmbr\r\n";
 
-    try w.flush();
+    // FIXME: Ew
+    var body_len_buf: [4]u8 = undefined;
+    const body_len = try std.fmt.bufPrint(&body_len_buf, "{d}", .{body.len});
+
+    try req.writer.writeHeader("Content-Type", "application/sdp");
+    try req.writer.writeHeader("Content-Length", body_len);
+    try req.writer.writeHeader("Contact", "<sip:streamer@127.0.0.1;transport=tcp>;+org.linphone.specs=\"lime\"");
+    try req.writer.finish(body);
 
     var loop = try sphtud.event.Loop2.init();
 
@@ -124,16 +159,15 @@ pub fn main() !void {
         .write = false
     });
 
+    const base_transport_id = 100;
     try loop.register(.{
-        .handle = s.handle,
-        .id = Events.source_read,
+        .handle = try transport.connFd(req.conn_handle),
+        .id = base_transport_id + req.service_handle,
         .read = true,
         .write = false
     });
 
-    var source_reader_buf: [4096]u8 = undefined;
-    var source_reader = s.reader(&source_reader_buf);
-    var ack_sent = false;
+    //var ack_sent = false;
 
     var active_reader_buf: [4096]u8 = undefined;
     var active_connection: ?ActiveConnection = null;
@@ -162,35 +196,40 @@ pub fn main() !void {
                     .write = false
                 });
             },
-            Events.source_read => {
-                std.debug.print("Got message on source\n-----\n", .{});
-                const message_type = try printWhatYouCan(&source_reader);
-                std.debug.print("\n-----\n", .{});
+            //Events.source_read => {
+            //    std.debug.print("Got message on source\n-----\n", .{});
+            //    const message_type = try printWhatYouCan(&source_reader);
+            //    std.debug.print("\n-----\n", .{});
 
-                if (message_type == .ok and !ack_sent) {
+            //    if (message_type == .ok and !ack_sent) {
 
-                    std.debug.print("SENDING ACK\n", .{});
-                    ack_sent = true;
-                    try w.writeAll(
-                        "ACK sip:mick-terminal@127.0.0.1:5062 SIP/2.0\r\n" ++
-                        "Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK.641H~Jw20;rport\r\n" ++
-                        "From: <sip:streamer@192.168.1.105>;tag=WcPQUVPZf\r\n" ++
-                        "To: <sip:mick-terminal@127.0.0.1>;tag=Wt4PGNRJAwvmPzREtTmL7o8kocfXWmqX\r\n" ++
-                        "CSeq: 20 ACK\r\n" ++
-                        "Call-ID: QUjvnPXpCj\r\n" ++
-                        "Max-Forwards: 70\r\n" ++
-                        "User-Agent: Linphone-Desktop/5.3.3 (cavetroll-linux-nixos) nixos/25.11 Qt/5.15.18 LinphoneSDK/5.4.0\r\n\r\n"
-                    );
+            //        std.debug.print("SENDING ACK\n", .{});
+            //        ack_sent = true;
+            //        try w.writeAll(
+            //            "ACK sip:mick-terminal@127.0.0.1:5062 SIP/2.0\r\n" ++
+            //            "Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK.641H~Jw20;rport\r\n" ++
+            //            "From: <sip:streamer@192.168.1.105>;tag=WcPQUVPZf\r\n" ++
+            //            "To: <sip:mick-terminal@127.0.0.1>;tag=Wt4PGNRJAwvmPzREtTmL7o8kocfXWmqX\r\n" ++
+            //            "CSeq: 20 ACK\r\n" ++
+            //            "Call-ID: QUjvnPXpCj\r\n" ++
+            //            "Max-Forwards: 70\r\n" ++
+            //            "User-Agent: Linphone-Desktop/5.3.3 (cavetroll-linux-nixos) nixos/25.11 Qt/5.15.18 LinphoneSDK/5.4.0\r\n\r\n"
+            //        );
 
-                    try w.flush();
+            //        try w.flush();
+            //    }
+            //},
+            //Events.new_read => {
+            //    std.debug.print("Got message on connection\n-----\n", .{});
+            //    try hexWhatYouCan(&active_connection.?.reader);
+            //    std.debug.print("\n-----\n", .{});
+            //},
+            else => {
+                if (event >= base_transport_id) {
+                    const reader = try transport.readerFromServiceId(event - base_transport_id);
+                    transaction_manager.processResponse(reader);
                 }
             },
-            Events.new_read => {
-                std.debug.print("Got message on connection\n-----\n", .{});
-                try hexWhatYouCan(&active_connection.?.reader);
-                std.debug.print("\n-----\n", .{});
-            },
-            else => {},
         }
     }
 }
