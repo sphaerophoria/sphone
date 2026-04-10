@@ -1,0 +1,195 @@
+const std = @import("std");
+const sphtud = @import("sphtud");
+const sip = @import("../sip.zig");
+const Transactions = sip.Transactions;
+const TransportService = @import("TransportService.zig");
+
+const SipService = @This();
+
+expansion: sphtud.util.ExpansionAlloc,
+transactions: Transactions,
+transport: TransportService,
+timer: *sphtud.io.TimerService,
+loop: *sphtud.io.Loop,
+start_timeout_id: usize,
+
+extra: sphtud.util.LinearMap(Extra),
+
+const Extra = struct {
+    timer_handle: ?sphtud.io.TimerService.TimerHandle,
+    callback_id: usize,
+    completion: CompletionStatus,
+};
+
+const CompletionStatus = struct {
+    val: u8,
+
+    const io_finished = 1;
+    const user_finished = 2;
+    const can_be_freed = 3;
+
+    pub const init = CompletionStatus{ .val = 0 };
+
+    fn finishUser(self: *CompletionStatus) void {
+        self.val |= user_finished;
+    }
+
+    fn finishIo(self: *CompletionStatus) void {
+        self.val |= io_finished;
+    }
+
+    fn isFullyComplete(self: *CompletionStatus) bool {
+        return self.val == can_be_freed;
+    }
+};
+pub const Handle = Transactions.Handle;
+
+const typical_transactions = 32;
+// In what world is a single guy sending 1024 messages at once... then 8x for safety
+const max_transactions = 1024;
+
+pub fn init(
+    alloc: *sphtud.alloc.Sphalloc,
+    timer: *sphtud.io.TimerService,
+    rand: std.Random,
+    spawner: *sphtud.io.TcpSpawner,
+    loop: *sphtud.io.Loop,
+    comptime ids: Ids,
+) !SipService {
+    const transactions = try Transactions.init(
+        try alloc.makeSubAlloc("transaction manager"),
+        rand,
+        typical_transactions,
+        max_transactions,
+    );
+    const transport_alloc = try alloc.makeSubAlloc("transport service");
+    const transport = try TransportService.init(
+        transport_alloc.arena(),
+        transport_alloc.expansion(),
+        spawner,
+        loop,
+        ids.transport,
+    );
+
+    return .{
+        .expansion = alloc.expansion(),
+        .transactions = transactions,
+        .transport = transport,
+        .loop = loop,
+        .timer = timer,
+        .extra = try .init(
+            alloc.arena(),
+            alloc.expansion(),
+            typical_transactions,
+            max_transactions,
+        ),
+        .start_timeout_id = ids.timeout.start,
+    };
+}
+
+pub fn startInvite(self: *SipService, params: Transactions.InviteParams, callback_id: usize) !Transactions.InviteHandle {
+    const res = try self.transactions.startInvite(params);
+    const extra = try self.extra.acquire(self.expansion, res.handle.handle.id);
+    extra.* = .{
+        .timer_handle = null,
+        .callback_id = callback_id,
+        .completion = .init,
+    };
+
+    try self.transport.sendMessage(res.dest, res.to_send);
+
+    return res.handle;
+}
+
+pub fn release(self: *SipService, handle: Transactions.Handle) void {
+    const extra = self.extra.getPtr(handle.id);
+    extra.completion.finishUser();
+    if (extra.completion.isFullyComplete()) {
+        self.deinitItem(handle);
+    }
+}
+
+fn deinitItem(self: *SipService, handle: Transactions.Handle) void {
+    const extra = self.extra.getPtr(handle.id);
+    if (extra.timer_handle) |h| {
+        self.timer.remove(h);
+    }
+
+    self.loop.clearEvents(self.start_timeout_id + handle.id);
+
+    self.extra.release(handle.id);
+    self.transactions.deinitRequest(handle);
+}
+
+pub fn service(self: *SipService, id: usize, comptime ids: Ids) !void {
+    switch (id) {
+        ids.timeout.start...ids.timeout.end => {
+            const handle = Handle.fromIdx(id - ids.timeout.start);
+            const now = try sphtud.io.clock_gettime(.BOOTTIME);
+            const action = try self.transactions.onTimeout(handle, now);
+            switch (action) {
+                .finish => {
+                    self.handleTxFinish(handle);
+                },
+                .none => {},
+            }
+        },
+        ids.transport.total.start...ids.transport.total.end => {
+            const te = try self.transport.service(id, ids.transport);
+
+            var response_buf: [4096]u8 = undefined;
+
+            while (true) {
+                const now = try sphtud.io.clock_gettime(.BOOTTIME);
+                const actions = self.transactions.onMessage(te.r, now, &response_buf) catch |e| {
+                    // FIXME: Somehow get this info back tot ransport to check for actual failure or block
+                    if (e == error.ReadFailed) break;
+                    return e;
+                };
+
+                for (actions) |action| switch (action) {
+                    .schedule_timeout => |t| {
+                        const extra = self.extra.getPtr(t.handle.id);
+                        extra.timer_handle = try self.timer.add(t.duration, ids.timeout.start + t.handle.id);
+                    },
+                    .send => |buf| {
+                        try self.transport.sendResponse(te.handle, buf);
+                    },
+                    .notify => |handle| {
+                        const extra = self.extra.getPtr(handle.id);
+                        try self.loop.pushEvent(extra.callback_id);
+                    },
+                    .finish => |handle| {
+                        self.handleTxFinish(handle);
+                    },
+                };
+            }
+        },
+        else => unreachable,
+    }
+}
+
+fn handleTxFinish(self: *SipService, handle: Transactions.Handle) void {
+    const extra = self.extra.getPtr(handle.id);
+    extra.completion.finishIo();
+
+    if (extra.completion.isFullyComplete()) {
+        self.deinitItem(handle);
+    }
+}
+
+pub const Ids = struct {
+    timeout: sphtud.io.IdAlloc.Range,
+    transport: TransportService.Ids,
+    total: sphtud.io.IdAlloc.Range,
+
+    pub fn init(alloc: *sphtud.io.IdAlloc) Ids {
+        const start = alloc.mark();
+
+        return .{
+            .timeout = alloc.allocMany(max_transactions),
+            .transport = .init(alloc),
+            .total = start.range(),
+        };
+    }
+};

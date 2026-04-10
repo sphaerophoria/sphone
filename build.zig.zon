@@ -1,0 +1,15 @@
+.{
+    .name = .sphone,
+    .version = "0.0.1",
+    .paths = .{
+        "src",
+        "build.zig",
+        "build.zig.zon",
+    },
+    .dependencies = .{
+        .sphtud = .{
+            .path = "sphtud",
+        }
+    },
+    .fingerprint = 0xbe19be0c8ca3ab88,
+}

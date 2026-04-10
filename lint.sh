@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+set -ex
+
+zig fmt --check src build.zig
+zig build
+./zig-out/bin/tests
