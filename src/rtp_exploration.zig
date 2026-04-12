@@ -18,7 +18,7 @@ pub fn openUdpSocket() !std.posix.socket_t {
     //}
 
     const socket = try std.posix.socket(std.os.linux.AF.INET, std.os.linux.SOCK.DGRAM, 0);
-    const addy = std.net.Ip4Address.init(.{127, 0, 0, 1}, 5004);
+    const addy = std.net.Ip4Address.init(.{ 127, 0, 0, 1 }, 5004);
     try std.posix.bind(socket, @ptrCast(&addy.sa), @sizeOf(@TypeOf(addy.sa)));
 
     return socket;
@@ -36,7 +36,6 @@ const RtpHeader = struct {
     csrc_data: []const u8,
 
     fn parse(r: *std.Io.Reader) !RtpHeader {
-
         const b1 = try r.takeByte();
         const version: u2 = @truncate(b1 >> 6);
         const extension: u1 = @truncate(b1 >> 4);
@@ -62,9 +61,7 @@ const RtpHeader = struct {
             .ssrc = ssrc,
             .csrc_data = csrc_data,
         };
-
     }
-
 };
 
 pub fn main() !void {

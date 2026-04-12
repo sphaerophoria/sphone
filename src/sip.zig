@@ -100,7 +100,7 @@ pub fn genBranchId(rng: std.Random) BranchId {
 
     for (0..rand_buf.len) |i| {
         const s = rand_buf[i];
-        @memcpy(ret[branch_prefix.len + 2 * i..][0..2], &std.fmt.hex(s));
+        @memcpy(ret[branch_prefix.len + 2 * i ..][0..2], &std.fmt.hex(s));
     }
 
     return ret;
@@ -119,7 +119,6 @@ pub const ViaParser = struct {
         sent_by,
         via_param,
     },
-
 
     const Output = union(enum) {
         new_via,
@@ -174,11 +173,10 @@ pub const ViaParser = struct {
                 const eql_idx = std.mem.indexOfScalar(u8, param_buf, '=') orelse param_buf.len;
 
                 const key = param_buf[0..eql_idx];
-                const val = if (eql_idx + 1 < param_buf.len) param_buf[eql_idx + 1..] else "";
+                const val = if (eql_idx + 1 < param_buf.len) param_buf[eql_idx + 1 ..] else "";
                 return .{ .param = .{ .key = key, .val = val } };
             },
         }
-
     }
 
     fn advanceTillParamEnd(self: *ViaParser) usize {
@@ -199,40 +197,39 @@ pub const ViaParser = struct {
 
 // FIXME: Surely we should test some other vias
 test "ViaParser sanity" {
+    var parser = ViaParser.init(" SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK.641H~Jw20;rport");
 
-     var parser = ViaParser.init(" SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK.641H~Jw20;rport");
+    try std.testing.expectEqual(.new_via, try parser.next());
 
-     try std.testing.expectEqual(.new_via, try parser.next());
+    const EnumT = @typeInfo(ViaParser.Output).@"union".tag_type.?;
 
-     const EnumT = @typeInfo(ViaParser.Output).@"union".tag_type.?;
+    {
+        const item = try parser.next() orelse return error.Missing;
+        try std.testing.expectEqual(.protocol, @as(EnumT, item));
+        try std.testing.expectEqualStrings("SIP/2.0/UDP", item.protocol);
+    }
 
-     {
-         const item = try parser.next() orelse return error.Missing;
-         try std.testing.expectEqual(.protocol, @as(EnumT, item));
-         try std.testing.expectEqualStrings("SIP/2.0/UDP", item.protocol);
-     }
+    {
+        const item = try parser.next() orelse return error.Missing;
+        try std.testing.expectEqual(.sent_by, @as(EnumT, item));
+        try std.testing.expectEqualStrings("127.0.0.1:5060", item.sent_by);
+    }
 
-     {
-         const item = try parser.next() orelse return error.Missing;
-         try std.testing.expectEqual(.sent_by, @as(EnumT, item));
-         try std.testing.expectEqualStrings("127.0.0.1:5060", item.sent_by);
-     }
+    {
+        const item = try parser.next() orelse return error.Missing;
+        try std.testing.expectEqual(.param, @as(EnumT, item));
+        try std.testing.expectEqualStrings("branch", item.param.key);
+        try std.testing.expectEqualStrings("z9hG4bK.641H~Jw20", item.param.val);
+    }
 
-     {
-         const item = try parser.next() orelse return error.Missing;
-         try std.testing.expectEqual(.param, @as(EnumT, item));
-         try std.testing.expectEqualStrings("branch", item.param.key);
-         try std.testing.expectEqualStrings("z9hG4bK.641H~Jw20", item.param.val);
-     }
+    {
+        const item = try parser.next() orelse return error.Missing;
+        try std.testing.expectEqual(.param, @as(EnumT, item));
+        try std.testing.expectEqualStrings("rport", item.param.key);
+        try std.testing.expectEqualStrings("", item.param.val);
+    }
 
-     {
-         const item = try parser.next() orelse return error.Missing;
-         try std.testing.expectEqual(.param, @as(EnumT, item));
-         try std.testing.expectEqualStrings("rport", item.param.key);
-         try std.testing.expectEqualStrings("", item.param.val);
-     }
-
-     try std.testing.expectEqual(null, try parser.next());
+    try std.testing.expectEqual(null, try parser.next());
 }
 
 test {

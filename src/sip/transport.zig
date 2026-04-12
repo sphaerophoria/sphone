@@ -1,7 +1,10 @@
 const std = @import("std");
 const sip = @import("../sip.zig");
 
-pub fn Transport(max_connections: usize, connection_buf_size: usize,) type {
+pub fn Transport(
+    max_connections: usize,
+    connection_buf_size: usize,
+) type {
     return struct {
         // FIXME: Find some allocation strategy
         connections: [max_connections]?Connection,
@@ -83,7 +86,6 @@ fn indexOfScalarPosOffset(haystack: []const u8, pos: usize, needle: u8, offset: 
     return ret;
 }
 
-
 const ConnectionParams = struct {
     host: []const u8,
     port: u16,
@@ -104,7 +106,6 @@ const ConnectionParams = struct {
             .host = uri[host_start..host_end],
             .port = port,
         };
-
     }
 };
 
@@ -121,7 +122,6 @@ test "uri parsing" {
         try std.testing.expectEqual(5060, params.port);
     }
 }
-
 
 // FIXME: Remove
 fn hexWhatYouCan(r: *std.Io.Reader) !void {

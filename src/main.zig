@@ -13,10 +13,7 @@ fn isWouldBlock(r: *std.net.Stream.Reader, e: anyerror) bool {
     return source_error == error.WouldBlock;
 }
 
-const MessageType = enum {
-    ok,
-    other
-};
+const MessageType = enum { ok, other };
 
 fn printWhatYouCan(sr: *std.net.Stream.Reader) !MessageType {
     const r: *std.Io.Reader = sr.interface();
@@ -65,7 +62,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    const in_addr = std.net.Address.initIp4(.{127, 0, 0, 1}, 5060);
+    const in_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 5060);
     var in_socket = try in_addr.listen(.{
         .reuse_address = true,
     });
@@ -152,20 +149,10 @@ pub fn main() !void {
 
     var loop = try sphtud.event.Loop2.init();
 
-    try loop.register(.{
-        .handle = in_socket.stream.handle,
-        .id = Events.accept,
-        .read = true,
-        .write = false
-    });
+    try loop.register(.{ .handle = in_socket.stream.handle, .id = Events.accept, .read = true, .write = false });
 
     const base_transport_id = 100;
-    try loop.register(.{
-        .handle = try transport.connFd(req.conn_handle),
-        .id = base_transport_id + req.service_handle,
-        .read = true,
-        .write = false
-    });
+    try loop.register(.{ .handle = try transport.connFd(req.conn_handle), .id = base_transport_id + req.service_handle, .read = true, .write = false });
 
     //var ack_sent = false;
 
@@ -189,12 +176,7 @@ pub fn main() !void {
 
                 try sphtud.event.setNonblock(stream.stream.handle);
 
-                try loop.register(.{
-                    .handle = stream.stream.handle,
-                    .id = Events.new_read,
-                    .read = true,
-                    .write = false
-                });
+                try loop.register(.{ .handle = stream.stream.handle, .id = Events.new_read, .read = true, .write = false });
             },
             //Events.source_read => {
             //    std.debug.print("Got message on source\n-----\n", .{});

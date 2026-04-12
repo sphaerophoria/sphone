@@ -21,7 +21,8 @@ pub fn TransactionManager(comptime max_transactions: usize) type {
         }
 
         pub fn processResponse(self: *Self, response: []const u8) !void {
-            _ = self; _ = response;
+            _ = self;
+            _ = response;
             //var r = std.Io.Reader.fixed(response);
             //const rp = sip.ResponseParser.init(r);
 
