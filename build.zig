@@ -17,4 +17,15 @@ pub fn build(b: *std.Build) !void {
     exe.root_module.addImport("sphtud", sphtud);
 
     b.installArtifact(exe);
+
+    const rtp_exploration = b.addExecutable(.{
+        .name = "rtp_exploration",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/rtp_exploration.zig"),
+            .target = target,
+            .optimize = opt,
+        }),
+    });
+
+    b.installArtifact(rtp_exploration);
 }

@@ -226,8 +226,8 @@ pub fn main() !void {
             //},
             else => {
                 if (event >= base_transport_id) {
-                    const reader = try transport.readerFromServiceId(event - base_transport_id);
-                    transaction_manager.processResponse(reader);
+                    //const reader = try transport.readerFromServiceId(event - base_transport_id);
+                    //transaction_manager.processResponse(reader);
                 }
             },
         }

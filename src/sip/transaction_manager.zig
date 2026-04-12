@@ -20,27 +20,39 @@ pub fn TransactionManager(comptime max_transactions: usize) type {
             transaction.state = .init(method);
         }
 
-        pub fn processResponse(self: *Self, response: []const u8, w: *std.Io.Writer) !void {
-            var r = std.Io.Reader.fixed(response);
-            const rp = sip.ResponseParser.init(r);
+        pub fn processResponse(self: *Self, response: []const u8) !void {
+            _ = self; _ = response;
+            //var r = std.Io.Reader.fixed(response);
+            //const rp = sip.ResponseParser.init(r);
 
-            var branch_id: ?sip.Method = null;
-            var method: ?sip.Method = null;
+            //var branch_id: ?sip.Method = null;
+            //var method: ?sip.Method = null;
+            //var via_found = false;
 
-            while (rp.readHeader()) |header| {
-                if (std.mem.eql(u8, header.key, "Via")) {
-                    // First via is the only one where branch matters
+            //while (rp.readHeader()) |header| {
+            //    if (!via_found and std.mem.eql(u8, header.key, "Via")) {
+            //        via_found = true;
 
-                }
+            //        // " SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK.641H~Jw20;rport\r\n"
+            //        // Consume until first whitespace
+            //        // Take section until comma or end
+            //        // Split section by semicolon
+            //        // Skip first (Dest)
+            //        // Each section split by =
+            //        // Check key == branch
+            //        // Extract value
 
-                if (std.mem.eql(u8, header.key, "CSeq")) {
-                    method = sip.Method.fromString(header.val) orelse return error.UnknownMethod;
-                    // Extract method here
-                }
-            }
+            //        // First via is the only one where branch matters
+            //    }
 
-            var transaction = self.findTransaction(branch_id, method);
-            transaction.service(response);
+            //    if (std.mem.eql(u8, header.key, "CSeq")) {
+            //        method = sip.Method.fromString(header.val) orelse return error.UnknownMethod;
+            //        // Extract method here
+            //    }
+            //}
+
+            //var transaction = self.findTransaction(branch_id, method);
+            //transaction.service(response);
         }
 
         fn findFreeTransaction(self: *Self) ?usize {
@@ -78,11 +90,12 @@ pub const Transaction = struct {
         complete,
     };
 
-    fn service(self: *Transaction, messsage: []const u8, w: *std.Io.Writer) !ServiceResponse {
-        switch (self.state) {
-            .invite => |is| {
-                // Send ack
-            },
-        }
-    }
+    //fn service(self: *Transaction, messsage: []const u8, w: *std.Io.Writer) !ServiceResponse {
+
+    //    switch (self.state) {
+    //        .invite => |is| {
+    //            // Send ack
+    //        },
+    //    }
+    //}
 };
