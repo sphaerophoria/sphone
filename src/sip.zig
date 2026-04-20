@@ -2,6 +2,8 @@ const std = @import("std");
 const transport = @import("sip/transport.zig");
 const transaction_manager = @import("sip/transaction_manager.zig");
 const parse_utils = @import("sip/parse_utils.zig");
+const parse = @import("parse.zig");
+comptime { _ = parse_utils; }
 
 pub const Transport = transport.Transport;
 pub const TransactionManager = transaction_manager.TransactionManager;
@@ -110,126 +112,111 @@ pub const Method = enum {
     invite,
 };
 
-pub const ViaParser = struct {
-    buf: []const u8,
-    idx: usize,
-    state: enum {
-        init,
-        sent_proto,
-        sent_by,
-        via_param,
-    },
+//pub const ViaParser = struct {
+//    buf: []const u8,
+//    idx: usize,
+//    state: enum {
+//        init,
+//        sent_proto,
+//        sent_by,
+//        via_param,
+//    },
+//
+//    const Output = union(enum) {
+//        new_via,
+//        protocol: []const u8,
+//        sent_by: []const u8,
+//        param: struct {
+//            key: []const u8,
+//            val: []const u8,
+//        },
+//    };
+//
+//    fn init(via: []const u8) ViaParser {
+//        return .{
+//            .buf = via,
+//            .idx = 0,
+//            .state = .init,
+//        };
+//    }
+//
+//    fn next(self: *ViaParser) !?Output {
+//        if (self.idx >= self.buf.len) return null;
+//
+//        const start = self.idx;
+//
+//        switch (self.state) {
+//            .init => {
+//                self.state = .sent_proto;
+//                // FIXME: split out a fn to consume LWS (linear whitespace)
+//                // BNF for LSP says [*WSP CRLF] 1*WSP which i think means "any
+//                // amount of WSP follows by a \r\n then 1 WSP"
+//                //
+//                // WSP is defined in rfc2234 as space (0x20) or htab (0x09)
+//                self.idx = parse_utils.consumeSws(self.buf, self.idx);
+//                return .new_via;
+//            },
+//            .sent_proto => {
+//                self.idx = std.mem.indexOfAnyPos(u8, self.buf, self.idx, parse_utils.wsp_chars) orelse return error.Invalid;
+//                const end = self.idx;
+//                self.idx += 1; // consume wsp
+//                self.state = .sent_by;
+//                return .{ .protocol = self.buf[start..end] };
+//            },
+//            .sent_by => {
+//                const end = self.advanceTillParamEnd();
+//                return .{ .sent_by = self.buf[start..end] };
+//            },
+//            .via_param => {
+//                const param_end = self.advanceTillParamEnd();
+//
+//                const param_buf = self.buf[start..param_end];
+//
+//                const eql_idx = std.mem.indexOfScalar(u8, param_buf, '=') orelse param_buf.len;
+//
+//                const key = param_buf[0..eql_idx];
+//                const val = if (eql_idx + 1 < param_buf.len) param_buf[eql_idx + 1 ..] else "";
+//                return .{ .param = .{ .key = key, .val = val } };
+//            },
+//        }
+//    }
+//
+//    fn advanceTillParamEnd(self: *ViaParser) usize {
+//        if (std.mem.indexOfScalarPos(u8, self.buf, self.idx, ';')) |pos| {
+//            self.idx = pos + 1;
+//            self.state = .via_param;
+//            return pos;
+//        } else if (std.mem.indexOfScalarPos(u8, self.buf, self.idx, ',')) |pos| {
+//            self.idx = pos + 1;
+//            self.state = .init;
+//            return pos;
+//        } else {
+//            self.idx = self.buf.len;
+//            return self.buf.len;
+//        }
+//    }
+//};
 
-    const Output = union(enum) {
-        new_via,
-        protocol: []const u8,
-        sent_by: []const u8,
-        param: struct {
-            key: []const u8,
-            val: []const u8,
-        },
-    };
-
-    fn init(via: []const u8) ViaParser {
-        return .{
-            .buf = via,
-            .idx = 0,
-            .state = .init,
-        };
-    }
-
-    fn next(self: *ViaParser) !?Output {
-        if (self.idx >= self.buf.len) return null;
-
-        const start = self.idx;
-
-        switch (self.state) {
-            .init => {
-                self.state = .sent_proto;
-                // FIXME: split out a fn to consume LWS (linear whitespace)
-                // BNF for LSP says [*WSP CRLF] 1*WSP which i think means "any
-                // amount of WSP follows by a \r\n then 1 WSP"
-                //
-                // WSP is defined in rfc2234 as space (0x20) or htab (0x09)
-                self.idx = parse_utils.consumeSws(self.buf, self.idx);
-                return .new_via;
-            },
-            .sent_proto => {
-                self.idx = std.mem.indexOfAnyPos(u8, self.buf, self.idx, parse_utils.wsp_chars) orelse return error.Invalid;
-                const end = self.idx;
-                self.idx += 1; // consume wsp
-                self.state = .sent_by;
-                return .{ .protocol = self.buf[start..end] };
-            },
-            .sent_by => {
-                const end = self.advanceTillParamEnd();
-                return .{ .sent_by = self.buf[start..end] };
-            },
-            .via_param => {
-                const param_end = self.advanceTillParamEnd();
-
-                const param_buf = self.buf[start..param_end];
-
-                const eql_idx = std.mem.indexOfScalar(u8, param_buf, '=') orelse param_buf.len;
-
-                const key = param_buf[0..eql_idx];
-                const val = if (eql_idx + 1 < param_buf.len) param_buf[eql_idx + 1 ..] else "";
-                return .{ .param = .{ .key = key, .val = val } };
-            },
-        }
-    }
-
-    fn advanceTillParamEnd(self: *ViaParser) usize {
-        if (std.mem.indexOfScalarPos(u8, self.buf, self.idx, ';')) |pos| {
-            self.idx = pos + 1;
-            self.state = .via_param;
-            return pos;
-        } else if (std.mem.indexOfScalarPos(u8, self.buf, self.idx, ',')) |pos| {
-            self.idx = pos + 1;
-            self.state = .init;
-            return pos;
-        } else {
-            self.idx = self.buf.len;
-            return self.buf.len;
-        }
-    }
-};
-
-// FIXME: Surely we should test some other vias
 test "ViaParser sanity" {
-    var parser = ViaParser.init(" SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK.641H~Jw20;rport");
+    const buf = "SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK.641H~Jw20;rport";
+    var tc = parse.TokenConsumer.init(buf);
 
-    try std.testing.expectEqual(.new_via, try parser.next());
+    const header = parse_utils.viaParm(&tc) orelse return error.ParseFailure;
 
-    const EnumT = @typeInfo(ViaParser.Output).@"union".tag_type.?;
+    try std.testing.expectEqualStrings("SIP/2.0/UDP", header.sent_protocol.data(buf));
+    try std.testing.expectEqualStrings("127.0.0.1:5060", header.sent_by.data(buf));
 
     {
-        const item = try parser.next() orelse return error.Missing;
-        try std.testing.expectEqual(.protocol, @as(EnumT, item));
-        try std.testing.expectEqualStrings("SIP/2.0/UDP", item.protocol);
+        const param = parse_utils.viaParams(&tc) orelse return error.ParseFailure;
+        try std.testing.expectEqualStrings("z9hG4bK.641H~Jw20", param.branch.data(buf));
     }
 
     {
-        const item = try parser.next() orelse return error.Missing;
-        try std.testing.expectEqual(.sent_by, @as(EnumT, item));
-        try std.testing.expectEqualStrings("127.0.0.1:5060", item.sent_by);
+        const param = parse_utils.viaParams(&tc) orelse return error.ParseFailure;
+        try std.testing.expectEqualStrings("rport", param.extension.key.data(buf));
     }
 
-    {
-        const item = try parser.next() orelse return error.Missing;
-        try std.testing.expectEqual(.param, @as(EnumT, item));
-        try std.testing.expectEqualStrings("branch", item.param.key);
-        try std.testing.expectEqualStrings("z9hG4bK.641H~Jw20", item.param.val);
-    }
-
-    {
-        const item = try parser.next() orelse return error.Missing;
-        try std.testing.expectEqual(.param, @as(EnumT, item));
-        try std.testing.expectEqualStrings("rport", item.param.key);
-        try std.testing.expectEqualStrings("", item.param.val);
-    }
-
-    try std.testing.expectEqual(null, try parser.next());
+    try std.testing.expectEqual(null, parse_utils.viaParams(&tc));
 }
 
 test {
