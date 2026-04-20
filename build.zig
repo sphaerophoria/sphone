@@ -18,6 +18,12 @@ pub fn build(b: *std.Build) !void {
 
     b.installArtifact(exe);
 
+    const tests = b.addTest(.{
+        .name = "tests",
+        .root_module = exe.root_module,
+    });
+    b.installArtifact(tests);
+
     const rtp_exploration = b.addExecutable(.{
         .name = "rtp_exploration",
         .root_module = b.createModule(.{
