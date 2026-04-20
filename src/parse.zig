@@ -1,4 +1,3 @@
-
 // Something that holds an index + buffer, and gives us utilities to check and
 // consume the next pieces
 //
@@ -42,7 +41,7 @@ pub const TokenConsumer = struct {
         if (c != expected) return null;
 
         defer self.idx += 1;
-        return Idx { self.idx };
+        return Idx{self.idx};
     }
 
     // inclusive range
@@ -51,7 +50,7 @@ pub const TokenConsumer = struct {
         if (c < start or c > end) return null;
 
         defer self.idx += 1;
-        return Idx { self.idx };
+        return Idx{self.idx};
     }
 
     pub fn takeString(self: *TokenConsumer, s: []const u8) ?Range {

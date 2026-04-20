@@ -3,7 +3,9 @@ const transport = @import("sip/transport.zig");
 const transaction_manager = @import("sip/transaction_manager.zig");
 const parse_utils = @import("sip/parse_utils.zig");
 const parse = @import("parse.zig");
-comptime { _ = parse_utils; }
+comptime {
+    _ = parse_utils;
+}
 
 pub const Transport = transport.Transport;
 pub const TransactionManager = transaction_manager.TransactionManager;

@@ -43,7 +43,6 @@ pub fn ipv4Address(tc: *TokenConsumer) ?Range {
 //    try std.testing.expectEqual(1, addy[3]);
 //}
 
-
 pub fn hex4(tc: *TokenConsumer) ?Range {
     var checkpoint = tc.checkpoint();
     defer checkpoint.restore();
@@ -103,7 +102,6 @@ fn hexpartTrailer(tc: *TokenConsumer) bool {
     _ = hexseq(tc); // Optional
     return true;
 }
-
 
 fn alphanum(tc: *TokenConsumer) ?Idx {
     if (parse.alpha(tc)) |r| return r;
@@ -181,7 +179,6 @@ test "domainLabel" {
         if (domainlabel(&tc)) |_| return error.UnexpectedParse;
     }
 }
-
 
 pub fn toplabel(tc: *TokenConsumer) ?Range {
     var cp = tc.checkpoint();
@@ -306,7 +303,6 @@ pub fn utf8NonAscii(tc: *TokenConsumer) ?Range {
     return null;
 }
 
-
 pub fn lws(tc: *TokenConsumer) ?Range {
     var cp = tc.checkpoint();
     defer cp.restore();
@@ -428,7 +424,7 @@ pub fn genericParam(tc: *TokenConsumer) ?GenericParam {
     var cp = tc.checkpoint();
     defer cp.restore();
 
-    const key_only = GenericParam {
+    const key_only = GenericParam{
         .key = key,
         .val = null,
     };
@@ -442,7 +438,6 @@ pub fn genericParam(tc: *TokenConsumer) ?GenericParam {
         .key = key,
         .val = val,
     };
-
 }
 
 pub fn token(tc: *TokenConsumer) ?Range {
@@ -472,14 +467,14 @@ fn tokenElem(tc: *TokenConsumer) ?Idx {
 }
 
 fn swsWrapped(tc: *TokenConsumer, char: u8) ?Range {
-     var cp = tc.checkpoint();
-     defer cp.restore();
+    var cp = tc.checkpoint();
+    defer cp.restore();
 
-     _ = sws(tc) orelse return null;
-     _ = tc.takeChar(char) orelse return null;
-     _ = sws(tc) orelse return null;
+    _ = sws(tc) orelse return null;
+    _ = tc.takeChar(char) orelse return null;
+    _ = sws(tc) orelse return null;
 
-     return cp.commit();
+    return cp.commit();
 }
 
 pub fn equal(tc: *TokenConsumer) ?Range {
@@ -528,13 +523,12 @@ pub fn sentBy(tc: *TokenConsumer) ?Range {
     return cp.commit();
 }
 
-
 pub fn colon(tc: *TokenConsumer) ?Range {
-      return swsWrapped(tc, ':');
+    return swsWrapped(tc, ':');
 }
 
 pub fn slash(tc: *TokenConsumer) ?Range {
-      return swsWrapped(tc, '/');
+    return swsWrapped(tc, '/');
 }
 
 pub fn otherTransport(tc: *TokenConsumer) ?Range {
@@ -621,9 +615,7 @@ pub fn viaReceived(tc: *TokenConsumer) ?Range {
     _ = tc.takeString("received") orelse return null;
     _ = equal(tc) orelse return null;
 
-    const ret = if (ipv4Address(tc)) |r| r
-        else if (ipv6Address(tc)) |r| r
-        else return null;
+    const ret = if (ipv4Address(tc)) |r| r else if (ipv6Address(tc)) |r| r else return null;
 
     _ = cp.commit();
 
