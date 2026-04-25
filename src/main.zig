@@ -58,8 +58,9 @@ const ActiveConnection = struct {
     reader: std.Io.net.Stream.Reader,
 };
 
-pub fn main(init: std.process.Init) !void {
-    const io = init.io;
+pub fn main() !void {
+    var io_impl = sphtud.Sphio.init();
+    const io = io_impl.io();
 
     const in_addr = std.Io.net.IpAddress{
         .ip4 = .{
