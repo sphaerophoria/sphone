@@ -11,18 +11,22 @@ pub fn Transport(
 
         const Self = @This();
         pub const Connection = struct {
-            socket: std.net.Stream,
+            socket: std.Io.net.Stream,
             read_buf: [connection_buf_size]u8,
             write_buf: [connection_buf_size]u8,
-            reader: std.net.Stream.Reader,
-            writer: std.net.Stream.Writer,
+            reader: std.Io.net.Stream.Reader,
+            writer: std.Io.net.Stream.Writer,
 
-            fn initPinned(self: *Connection, scratch: std.mem.Allocator, params: ConnectionParams) !void {
-                self.socket = try std.net.tcpConnectToHost(scratch, params.host, params.port);
-                errdefer self.socket.close();
+            fn initPinned(self: *Connection, io: std.Io, params: ConnectionParams) !void {
+                const host = try std.Io.net.HostName.init(params.host);
+                self.socket = try host.connect(io, params.port, .{
+                    .mode = .stream,
+                    .protocol = .tcp,
+                });
+                errdefer self.socket.close(io);
 
-                self.reader = self.socket.reader(&self.read_buf);
-                self.writer = self.socket.writer(&self.write_buf);
+                self.reader = self.socket.reader(io, &self.read_buf);
+                self.writer = self.socket.writer(io, &self.write_buf);
             }
         };
 
@@ -42,14 +46,14 @@ pub fn Transport(
         }
 
         // FIXME: API does not provide a way to shut down a connection
-        pub fn makeRequest(self: *Self, scratch: std.mem.Allocator, params: sip.ClientRequestWriter.InitParams) !Request {
+        pub fn makeRequest(self: *Self, io: std.Io, params: sip.ClientRequestWriter.InitParams) !Request {
             const connection_params = try ConnectionParams.fromUri(params.uri);
 
             // FIXME: Figure out if a valid connection for this URI exists
             const conn_id = self.findFreeConnection() orelse return error.NoConnectionsAvaialable;
 
             self.connections[conn_id] = @as(Connection, undefined);
-            try self.connections[conn_id].?.initPinned(scratch, connection_params);
+            try self.connections[conn_id].?.initPinned(io, connection_params);
 
             return .{
                 .conn_handle = conn_id,
@@ -63,7 +67,7 @@ pub fn Transport(
         // FIXME: Strong type handle
         pub fn connFd(self: *const Self, handle: usize) !std.posix.fd_t {
             const conn = &(self.connections[handle] orelse return error.InvalidHandle);
-            return conn.socket.handle;
+            return conn.socket.socket.handle;
         }
 
         fn findFreeConnection(self: *Self) ?usize {

@@ -54,16 +54,21 @@ fn hexWhatYouCan(sr: *std.net.Stream.Reader) !void {
 }
 
 const ActiveConnection = struct {
-    stream: std.net.Stream,
-    reader: std.net.Stream.Reader,
+    stream: std.Io.net.Stream,
+    reader: std.Io.net.Stream.Reader,
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
 
-    const in_addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 5060);
-    var in_socket = try in_addr.listen(.{
+    const in_addr = std.Io.net.IpAddress{
+        .ip4 = .{
+            .bytes = .{ 127, 0, 0, 1 },
+            .port = 5060,
+        },
+    };
+
+    var in_socket = try in_addr.listen(io, .{
         .reuse_address = true,
     });
 
@@ -83,7 +88,7 @@ pub fn main() !void {
 
     var rng = blk: {
         var seed: [std.Random.DefaultCsprng.secret_seed_length]u8 = undefined;
-        try std.posix.getrandom(&seed);
+        try io.randomSecure(&seed);
         break :blk std.Random.DefaultCsprng.init(seed);
     };
 
@@ -101,7 +106,7 @@ pub fn main() !void {
     var via_buf: [4096]u8 = undefined;
     const via = try std.fmt.bufPrint(&via_buf, "SIP/2.0/TCP 127.0.0.1:5060;branch={s}", .{&branch_id});
 
-    var req = try transport.makeRequest(alloc, .{
+    var req = try transport.makeRequest(io, .{
         .method = "INVITE",
         .uri = "sip:mick-terminal@127.0.0.1:5062",
         .via = via,
@@ -149,7 +154,7 @@ pub fn main() !void {
 
     var loop = try sphtud.event.Loop2.init();
 
-    try loop.register(.{ .handle = in_socket.stream.handle, .id = Events.accept, .read = true, .write = false });
+    try loop.register(.{ .handle = in_socket.socket.handle, .id = Events.accept, .read = true, .write = false });
 
     const base_transport_id = 100;
     try loop.register(.{ .handle = try transport.connFd(req.conn_handle), .id = base_transport_id + req.service_handle, .read = true, .write = false });
@@ -163,18 +168,19 @@ pub fn main() !void {
         switch (event) {
             Events.accept => {
                 if (active_connection) |*a| {
-                    a.stream.close();
+                    a.stream.close(io);
                     active_connection = null;
                 }
 
-                const stream = try in_socket.accept();
-                const reader = stream.stream.reader(&active_reader_buf);
+                const stream = try in_socket.accept(io);
+                const reader = stream.reader(io, &active_reader_buf);
                 active_connection = .{
-                    .stream = stream.stream,
+                    .stream = stream,
                     .reader = reader,
                 };
 
-                try sphtud.event.setNonblock(stream.stream.handle);
+                // FIXME: actually fix
+                if (true) @panic("Set nonblock");
 
                 try loop.register(.{ .handle = stream.stream.handle, .id = Events.new_read, .read = true, .write = false });
             },
@@ -217,5 +223,5 @@ pub fn main() !void {
 }
 
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDecls(@This());
 }

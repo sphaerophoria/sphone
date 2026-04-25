@@ -1,25 +1,17 @@
 const std = @import("std");
 
-pub fn openUdpSocket() !std.posix.socket_t {
-    //if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-    //    perror("socket");
-    //    return 1;
-    //}
+pub fn openUdpSocket(io: std.Io) !std.Io.net.Socket {
+    const addr = std.Io.net.IpAddress{
+        .ip4 = .{
+            .bytes = .{ 127, 0, 0, 1 },
+            .port = 5004,
+        },
+    };
 
-    //memset(&servaddr, 0, sizeof(servaddr));
-    //servaddr.sin_family = AF_INET;
-    //servaddr.sin_addr.s_addr = INADDR_ANY;
-    //servaddr.sin_port = htons(PORT);
-
-    //if (bind(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) < 0) {
-    //    perror("bind");
-    //    close(sockfd);
-    //    return 1;
-    //}
-
-    const socket = try std.posix.socket(std.os.linux.AF.INET, std.os.linux.SOCK.DGRAM, 0);
-    const addy = std.net.Ip4Address.init(.{ 127, 0, 0, 1 }, 5004);
-    try std.posix.bind(socket, @ptrCast(&addy.sa), @sizeOf(@TypeOf(addy.sa)));
+    const socket = try addr.bind(io, .{
+        .mode = .dgram,
+        .protocol = .udp,
+    });
 
     return socket;
 }
@@ -65,16 +57,26 @@ const RtpHeader = struct {
 };
 
 pub fn main() !void {
-    const socket = try openUdpSocket();
+    var io_impl = std.Io.Threaded.init_single_threaded;
+    const io = io_impl.io();
+
+    const socket = try openUdpSocket(io);
     var buf: [1 * 1024 * 1024]u8 = undefined;
 
-    const wav_f = try std.fs.cwd().createFile("wav.csv", .{});
+    const wav_f = try std.Io.Dir.cwd().createFile(io, "wav.csv", .{});
     var writer_buf: [4096]u8 = undefined;
-    var wav_writer_concrete = wav_f.writer(&writer_buf);
+    var wav_writer_concrete = wav_f.writer(io, &writer_buf);
     var wav_writer = &wav_writer_concrete.interface;
 
     for (0..10) |_| {
-        const recv_len = try std.posix.recvfrom(socket, &buf, 0, null, null);
+        const recv_len: usize = while (true) {
+            const rc = std.posix.system.recvfrom(socket.handle, &buf, buf.len, 0, null, null);
+            switch (std.posix.errno(rc)) {
+                .SUCCESS => break @intCast(rc),
+                .INTR => continue,
+                else => return error.RecvFailed,
+            }
+        };
         const received = buf[0..recv_len];
 
         var r = std.Io.Reader.fixed(received);
