@@ -7,7 +7,11 @@ pub fn build(b: *std.Build) !void {
     const sphtud = b.dependency("sphtud", .{
         .with_gl = false,
         .with_glfw = false,
+        .unique = "sphone",
     }).module("sphtud");
+
+    const sphaudio = b.dependency("sphaudio", .{})
+        .module("sphaudio");
 
     const exe = b.addExecutable(.{
         .name = "sphone",
@@ -18,6 +22,7 @@ pub fn build(b: *std.Build) !void {
         }),
     });
     exe.root_module.addImport("sphtud", sphtud);
+    exe.root_module.addImport("sphaudio", sphaudio);
 
     b.installArtifact(exe);
 
@@ -36,6 +41,7 @@ pub fn build(b: *std.Build) !void {
         }),
     });
     rtp_exploration.root_module.addImport("sphtud", sphtud);
+    rtp_exploration.root_module.addImport("sphaudio", sphaudio);
 
     b.installArtifact(rtp_exploration);
 }

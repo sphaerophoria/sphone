@@ -8,8 +8,11 @@
     },
     .dependencies = .{
         .sphtud = .{
-            .path = "sphtud",
-        }
+            .path = "./sphtud",
+        },
+        .sphaudio = .{
+            .path = "./sphaudio",
+        },
     },
     .fingerprint = 0xbe19be0c8ca3ab88,
 }

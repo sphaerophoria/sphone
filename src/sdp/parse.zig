@@ -345,13 +345,20 @@ pub fn mediaDescription(alloc: std.mem.Allocator, tc: *parse.TokenConsumer) !?Me
     const media = try mediaField(alloc, tc) orelse return null;
 
     _ = ignoreSdpLine(tc, 'i');
-    while (ignoreSdpLine(tc, 'c')) {}
+
+    var connections = std.ArrayList(ConnectionField).empty;
+
+    while (try connectionField(tc)) |cf| {
+        try connections.append(alloc, cf);
+    }
+
     while (ignoreSdpLine(tc, 'b')) {}
     _ = ignoreSdpLine(tc, 'k');
     while (ignoreSdpLine(tc, 'a')) {}
 
     return .{
         .media = media,
+        .connections = connections.items,
     };
 }
 

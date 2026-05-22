@@ -4,14 +4,21 @@ version: u2,
 extension: bool,
 cc: u4,
 marker: bool,
-payload_type: u7,
+payload_type: PayloadType,
 sequence_number: u16,
 timestamp: u32,
 ssrc: u32,
 csrc_data: []const u8,
 payload: []const u8,
 
-pub fn parse(frame_data: []const u8) !@This() {
+const Frame = @This();
+
+pub const PayloadType = enum(u7) {
+    pcmu = 0,
+    _,
+};
+
+pub fn parse(frame_data: []const u8) !Frame {
     var r = std.Io.Reader.fixed(frame_data);
 
     const b1 = try r.takeByte();
@@ -35,7 +42,7 @@ pub fn parse(frame_data: []const u8) !@This() {
         .extension = extension > 0,
         .cc = cc,
         .marker = marker > 0,
-        .payload_type = payload_type,
+        .payload_type = @enumFromInt(payload_type),
         .sequence_number = sequence_number,
         .timestamp = timestamp,
         .ssrc = ssrc,

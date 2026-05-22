@@ -8,13 +8,25 @@ pub const MediaField = struct {
     num_ports: ?parse.Range,
     protocol: parse.Range,
     formats: []parse.Range,
+
+    pub fn portRange(self: MediaField, data: []const u8) ![2]u16 {
+        const num_ports = if (self.num_ports) |num_ports_r|
+            try std.fmt.parseInt(u16, num_ports_r.data(data), 10)
+        else
+            1;
+
+        const start_port = try std.fmt.parseInt(u16, self.port.data(data), 10);
+
+        return .{
+            start_port,
+            start_port + num_ports,
+        };
+    }
 };
 
 pub const MediaDescription = struct {
     media: MediaField,
-
-    // Other fields are ignored for now, but are relevant. Single field struct
-    // makes more sense for future code
+    connections: []ConnectionField,
 };
 
 pub const Origin = struct {
@@ -30,6 +42,10 @@ pub const ConnectionField = struct {
     net_type: parse.Range,
     addr_type: parse.Range,
     connection_address: parse.Range,
+
+    pub fn toIpAddress(self: ConnectionField, data: []const u8, port: u16) !std.Io.net.IpAddress {
+        return .parse(self.connection_address.data(data), port);
+    }
 };
 
 pub const SessionDescription = struct {
