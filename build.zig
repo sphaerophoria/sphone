@@ -35,6 +35,7 @@ pub fn build(b: *std.Build) !void {
             .optimize = opt,
         }),
     });
+    rtp_exploration.root_module.addImport("sphtud", sphtud);
 
     b.installArtifact(rtp_exploration);
 }

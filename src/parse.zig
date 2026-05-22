@@ -126,6 +126,21 @@ pub fn digit(tc: *TokenConsumer) ?Idx {
     return tc.takeCharRange('0', '9');
 }
 
+pub fn digitRange(tc: *TokenConsumer, min: usize, max: usize) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+
+    for (0..min) |_| {
+        _ = digit(tc) orelse return null;
+    }
+
+    for (min..max) |_| {
+        _ = digit(tc) orelse break;
+    }
+
+    return cp.commit();
+}
+
 pub fn dquote(tc: *TokenConsumer) ?Idx {
     return tc.takeChar('"');
 }

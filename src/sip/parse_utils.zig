@@ -733,21 +733,6 @@ test "statusLine" {
     try std.testing.expectEqualStrings("Trying", status_line.reason.data(line));
 }
 
-fn digitRange(tc: *TokenConsumer, min: usize, max: usize) ?Range {
-    var cp = tc.checkpoint();
-    defer cp.restore();
-
-    for (0..min) |_| {
-        _ = parse.digit(tc) orelse return null;
-    }
-
-    for (min..max) |_| {
-        _ = parse.digit(tc) orelse break;
-    }
-
-    return cp.commit();
-}
-
 const SipVersion = struct {
     major: Range,
     minor: Range,
@@ -760,9 +745,9 @@ pub fn sipVersion(tc: *TokenConsumer) ?SipVersion {
 
     _ = tc.takeString("SIP/") orelse return null;
 
-    const major = digitRange(tc, 1, std.math.maxInt(usize)) orelse return null;
+    const major = parse.digitRange(tc, 1, std.math.maxInt(usize)) orelse return null;
     _ = tc.takeChar('.') orelse return null;
-    const minor = digitRange(tc, 1, std.math.maxInt(usize)) orelse return null;
+    const minor = parse.digitRange(tc, 1, std.math.maxInt(usize)) orelse return null;
 
     _ = cp.commit();
 
@@ -773,7 +758,7 @@ pub fn sipVersion(tc: *TokenConsumer) ?SipVersion {
 }
 
 pub fn statusCode(tc: *TokenConsumer) ?Range {
-    return digitRange(tc, 3, 3);
+    return parse.digitRange(tc, 3, 3);
 }
 
 pub const CSeq = struct {
@@ -786,7 +771,7 @@ pub fn cseq(tc: *TokenConsumer) ?CSeq {
     var cp = tc.checkpoint();
     defer cp.restore();
 
-    const seq = digitRange(tc, 1, std.math.maxInt(usize)) orelse return null;
+    const seq = parse.digitRange(tc, 1, std.math.maxInt(usize)) orelse return null;
     _ = lws(tc) orelse return null;
     const methodr = method(tc) orelse return null;
 
