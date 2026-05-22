@@ -3,11 +3,10 @@ const sphtud = @import("sphtud");
 const sdpm = @import("sdp.zig");
 const parse = @import("parse.zig");
 
-pub fn openUdpSocket(io: std.Io, addr: std.Io.net.IpAddress) !std.Io.net.Socket {
-    const socket = try addr.bind(io, .{
-        .mode = .dgram,
-        .protocol = .udp,
-    });
+pub fn openUdpSocket(addr: std.Io.net.IpAddress) !std.posix.fd_t {
+    const system = sphtud.io.system;
+    const socket = try sphtud.io.socket(system.AF.INET, system.SOCK.DGRAM, 0);
+    try sphtud.io.bind(socket, addr);
 
     return socket;
 }
@@ -83,9 +82,6 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var tc = parse.TokenConsumer.init(sdp);
     const parsed = try sdpm.sessionDescription(alloc, &tc) orelse return error.InvalidSdp;
 
-    var io_impl = std.Io.Threaded.init_single_threaded;
-    const io = io_impl.io();
-
     const media_description = parsed.media_descriptions[0];
     // FIXME: Media description might contain the connection, need to support that override
     const port = try std.fmt.parseInt(u16, media_description.media.port.data(sdp), 10);
@@ -99,7 +95,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     if (!std.mem.eql(u8, "audio", media_description.media.media.data(sdp))) return error.UnhandledMedia;
     if (!std.mem.eql(u8, "RTP/AVP", media_description.media.protocol.data(sdp))) return error.UnhandledProto;
 
-    const socket = try openUdpSocket(io, ip);
+    const socket = try openUdpSocket(ip);
     var buf: [1 * 1024 * 1024]u8 = undefined;
 
     // I THINK this is supposed to just be 0, otherwise the spec we are reading
@@ -130,20 +126,18 @@ pub fn main(init: std.process.Init.Minimal) !void {
         }
     }
 
-    const wav_f = try std.Io.Dir.cwd().createFile(io, "wav.csv", .{});
+    const wav_fd = try sphtud.io.open("wav.csv", .{
+        .ACCMODE = .RDWR,
+        .CLOEXEC = true,
+        .CREAT = true,
+        .TRUNC = true,
+    }, 0);
     var writer_buf: [4096]u8 = undefined;
-    var wav_writer_concrete = wav_f.writer(io, &writer_buf);
+    var wav_writer_concrete = sphtud.io.Writer.init(wav_fd, &writer_buf);
     var wav_writer = &wav_writer_concrete.interface;
 
     for (0..10) |_| {
-        const recv_len: usize = while (true) {
-            const rc = std.posix.system.recvfrom(socket.handle, &buf, buf.len, 0, null, null);
-            switch (std.posix.errno(rc)) {
-                .SUCCESS => break @intCast(rc),
-                .INTR => continue,
-                else => return error.RecvFailed,
-            }
-        };
+        const recv_len = try sphtud.io.recvfrom(socket, &buf, 0, null, null);
         const received = buf[0..recv_len];
 
         var r = std.Io.Reader.fixed(received);
