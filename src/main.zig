@@ -49,7 +49,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     var chain_buf: [256]usize = undefined;
     var loop = try sphtud.io.Loop.init(&chain_buf);
-    var timer = try sphtud.io.TimerService.init(root_alloc.general(), &loop, ids.timer);
+    var timer = try sphtud.io.TimerService.init(root_alloc.arena(), root_alloc.expansion(), &loop, ids.timer);
     var dns_service = try sphtud.io.DnsService.init(&root_alloc, &loop, &timer, ids.dns);
     var spawner = try sphtud.io.TcpSpawner.init(root_alloc.arena(), root_alloc.expansion(), &dns_service, &loop, ids.tcp_spawner);
 
