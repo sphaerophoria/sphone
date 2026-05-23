@@ -2,6 +2,7 @@ const std = @import("std");
 const sphtud = @import("sphtud");
 const sdpm = @import("sdp.zig");
 const parse = @import("parse.zig");
+const RtpFrame = @import("RtpFrame.zig");
 
 pub fn openUdpSocket(addr: std.Io.net.IpAddress) !std.posix.fd_t {
     const system = sphtud.io.system;
@@ -10,46 +11,6 @@ pub fn openUdpSocket(addr: std.Io.net.IpAddress) !std.posix.fd_t {
 
     return socket;
 }
-
-const RtpHeader = struct {
-    version: u2,
-    extension: bool,
-    cc: u4,
-    marker: bool,
-    payload_type: u7,
-    sequence_number: u16,
-    timestamp: u32,
-    ssrc: u32,
-    csrc_data: []const u8,
-
-    fn parse(r: *std.Io.Reader) !RtpHeader {
-        const b1 = try r.takeByte();
-        const version: u2 = @truncate(b1 >> 6);
-        const extension: u1 = @truncate(b1 >> 4);
-        const cc: u4 = @truncate(b1);
-
-        const b2 = try r.takeByte();
-        const marker: u1 = @truncate(b2 >> 7);
-        const payload_type: u7 = @truncate(b2);
-
-        const sequence_number = try r.takeInt(u16, .big);
-        const timestamp = try r.takeInt(u32, .big);
-        const ssrc = try r.takeInt(u32, .big);
-        const csrc_data = try r.take(cc * 4);
-
-        return .{
-            .version = version,
-            .extension = extension > 0,
-            .cc = cc,
-            .marker = marker > 0,
-            .payload_type = payload_type,
-            .sequence_number = sequence_number,
-            .timestamp = timestamp,
-            .ssrc = ssrc,
-            .csrc_data = csrc_data,
-        };
-    }
-};
 
 fn anyFormatsArePcmu(buf: []const u8, formats: []const parse.Range) bool {
     for (formats) |fmt| {
@@ -140,19 +101,16 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const recv_len = try sphtud.io.recvfrom(socket, &buf, 0, null, null);
         const received = buf[0..recv_len];
 
-        var r = std.Io.Reader.fixed(received);
-        const header = try RtpHeader.parse(&r);
-        if (header.payload_type != 0) continue;
+        const frame = try RtpFrame.parse(received);
+        if (frame.payload_type != 0) continue;
 
-        std.debug.print("{any}\n\n", .{header});
+        std.debug.print("{any}\n\n", .{frame});
 
         // -1^s * ((33 + 2m) * 2^e - 33)
 
         // Guaranteed PCMU
         //
-        while (true) {
-            const b = ~(r.takeByte() catch break);
-
+        for (frame.payload) |b| {
             const m: i16 = @as(u4, @truncate(b));
             const e: u3 = @truncate(b >> 4);
             const s: u1 = @truncate(b >> 7);
