@@ -203,27 +203,13 @@ pub fn startInvite(self: *TransactionManager, params: InviteParams) !InviteRes {
         .cseq = cseq_s,
     }, &message_w);
 
-    // hardcoded SDP copied from linphone
+    // SDP copied from linphone and stripped down until it looked about right
     const body = "v=0\r\n" ++
         "o=streamer 416 78 IN IP4 127.0.0.1\r\n" ++
         "s=Talk\r\n" ++
         "c=IN IP4 127.0.0.1\r\n" ++
         "t=0 0\r\n" ++
-        "a=rtcp-xr:rcvr-rtt=all:10000 stat-summary=loss,dup,jitt,TTL voip-metrics\r\n" ++
-        "a=record:off\r\n" ++
-        "m=audio 48013 RTP/AVP 96 97 98 0 8 101 99 100\r\n" ++
-        "a=rtpmap:96 opus/48000/2\r\n" ++
-        "a=fmtp:96 useinbandfec=1\r\n" ++
-        "a=rtpmap:97 speex/16000\r\n" ++
-        "a=fmtp:97 vbr=on\r\n" ++
-        "a=rtpmap:98 speex/8000\r\n" ++
-        "a=fmtp:98 vbr=on\r\n" ++
-        "a=rtpmap:101 telephone-event/48000\r\n" ++
-        "a=rtpmap:99 telephone-event/16000\r\n" ++
-        "a=rtpmap:100 telephone-event/8000\r\n" ++
-        "a=rtcp:56541\r\n" ++
-        "a=rtcp-fb:* trr-int 5000\r\n" ++
-        "a=rtcp-fb:* ccm tmmbr\r\n";
+        "m=audio 48013 RTP/AVP 0\r\n";
 
     var body_len_buf: [4]u8 = undefined;
     const body_len = try std.fmt.bufPrint(&body_len_buf, "{d}", .{body.len});
