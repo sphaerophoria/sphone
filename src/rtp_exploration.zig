@@ -20,28 +20,30 @@ fn anyFormatsArePcmu(buf: []const u8, formats: []const parse.Range) bool {
     return false;
 }
 
+fn allocFile(alloc: std.mem.Allocator, path: [:0]const u8) ![]const u8 {
+    const fd = try sphtud.io.open(path, .{
+        .ACCMODE = .RDONLY,
+    }, 0);
+    defer sphtud.io.close(fd);
+
+    var reader_buf: [4096]u8 = undefined;
+    var r = sphtud.io.Reader.init(fd, &reader_buf);
+
+    return try r.interface.allocRemaining(alloc, .unlimited);
+}
+
 pub fn main(init: std.process.Init.Minimal) !void {
     var arg_it = init.args.iterate();
     _ = arg_it.next();
 
     const sdp_path = arg_it.next().?;
 
-    const sdp_fd = try sphtud.io.open(sdp_path, .{
-        .ACCMODE = .RDONLY,
-    }, 0);
-    defer sphtud.io.close(sdp_fd);
-
     var alloc_buf: [1 * 1024 * 1024]u8 = undefined;
     var buf_alloc = sphtud.alloc.BufAllocator.init(&alloc_buf);
     const alloc = buf_alloc.allocator();
 
-    var sdp_reader_buf: [4096]u8 = undefined;
-    var sdp_r = sphtud.io.Reader.init(sdp_fd, &sdp_reader_buf);
-    const sdp = try sdp_r.interface.allocRemaining(alloc, .unlimited);
-    std.debug.print("sdp: {s}\n", .{sdp});
-
-    var tc = parse.TokenConsumer.init(sdp);
-    const parsed = try sdpm.sessionDescription(alloc, &tc) orelse return error.InvalidSdp;
+    const sdp = try allocFile(alloc, sdp_path);
+    const parsed = try sdpm.parseSessionDescription(alloc, sdp);
 
     const media_description = parsed.media_descriptions[0];
     // FIXME: Media description might contain the connection, need to support that override
