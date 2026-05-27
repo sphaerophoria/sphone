@@ -31,17 +31,4 @@ pub fn build(b: *std.Build) !void {
         .root_module = exe.root_module,
     });
     b.installArtifact(tests);
-
-    const rtp_exploration = b.addExecutable(.{
-        .name = "rtp_exploration",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/rtp_exploration.zig"),
-            .target = target,
-            .optimize = opt,
-        }),
-    });
-    rtp_exploration.root_module.addImport("sphtud", sphtud);
-    rtp_exploration.root_module.addImport("sphaudio", sphaudio);
-
-    b.installArtifact(rtp_exploration);
 }

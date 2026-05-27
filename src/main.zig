@@ -3,8 +3,12 @@ const sphtud = @import("sphtud");
 const sip = @import("sip.zig");
 const TransportService = @import("io/TransportService.zig");
 const SipService = @import("io/SipService.zig");
+const PlaybackRtpStream = @import("io/PlaybackRtpStream.zig");
+const sphaudio = @import("sphaudio");
+const rtp = @import("rtp.zig");
 
 const max_dns_connections = 1024;
+const rtp_port = 48102;
 
 const Ids = struct {
     timer: usize,
@@ -12,6 +16,8 @@ const Ids = struct {
     tcp_spawner: sphtud.io.TcpSpawner.Ids,
     sip: SipService.Ids,
     invite_complete: usize,
+    rtp: PlaybackRtpStream.Ids,
+    audio: usize,
 
     pub fn init() Ids {
         var alloc = sphtud.io.IdAlloc{ .idx = 0 };
@@ -22,6 +28,8 @@ const Ids = struct {
             .tcp_spawner = .init(&alloc),
             .sip = .init(&alloc),
             .invite_complete = alloc.allocOne(),
+            .rtp = .init(&alloc),
+            .audio = alloc.allocOne(),
         };
     }
 };
@@ -71,7 +79,32 @@ pub fn main(init: std.process.Init.Minimal) !void {
         .out_buf = &message_buf,
         // This should probably be resolved by transport
         .sent_by = "127.0.0.1:5060",
+        .rtp_port = rtp_port,
     }, ids.invite_complete);
+
+    var pw = try sphaudio.Pipewire.init();
+    defer pw.deinit();
+
+    try loop.register(.{
+        .id = ids.audio,
+        .handle = pw.pollFd(),
+        .read = true,
+        .write = false,
+    });
+
+    var playback_stream: PlaybackRtpStream = undefined;
+    try playback_stream.initPinned(
+        .{
+            .ip4 = .{
+                .bytes = .{ 0, 0, 0, 0 },
+                .port = rtp_port,
+            },
+        },
+        &pw,
+        &loop,
+        &timer,
+        ids.rtp,
+    );
 
     while (true) {
         const event = (try loop.poll(-1)) orelse continue;
@@ -90,7 +123,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
             },
             ids.invite_complete => {
                 std.debug.print("Invite complete!\n", .{});
+
                 sip_service.release(invite_res.handle);
+            },
+            ids.rtp.total.start...ids.rtp.total.end => {
+                try playback_stream.service(event, &timer, ids.rtp);
+            },
+            ids.audio => {
+                try pw.service();
             },
             else => unreachable,
         }

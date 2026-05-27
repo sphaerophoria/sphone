@@ -160,6 +160,7 @@ pub const InviteParams = struct {
     from: []const u8,
     out_buf: []u8,
     sent_by: []const u8,
+    rtp_port: u16,
 };
 
 const InviteRes = struct {
@@ -204,12 +205,13 @@ pub fn startInvite(self: *TransactionManager, params: InviteParams) !InviteRes {
     }, &message_w);
 
     // SDP copied from linphone and stripped down until it looked about right
-    const body = "v=0\r\n" ++
+    var body_buf: [1024]u8 = undefined;
+    const body = try std.fmt.bufPrint(&body_buf, "v=0\r\n" ++
         "o=streamer 416 78 IN IP4 127.0.0.1\r\n" ++
         "s=Talk\r\n" ++
         "c=IN IP4 127.0.0.1\r\n" ++
         "t=0 0\r\n" ++
-        "m=audio 48013 RTP/AVP 0\r\n";
+        "m=audio {d} RTP/AVP 0\r\n", .{params.rtp_port});
 
     var body_len_buf: [4]u8 = undefined;
     const body_len = try std.fmt.bufPrint(&body_len_buf, "{d}", .{body.len});

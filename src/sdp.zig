@@ -60,3 +60,33 @@ pub fn parseSessionDescription(alloc: std.mem.Allocator, data: []const u8) !Sess
 
     return try sdp_parse.sessionDescription(alloc, &tc) orelse return error.ParseFailure;
 }
+
+test "sip received" {
+    const data =
+        "v=0\r\n" ++
+        "o=- 3988897187 3988897188 IN IP4 192.168.1.105\r\n" ++
+        "s=pjmedia\r\n" ++
+        "b=AS:84\r\n" ++
+        "t=0 0\r\n" ++
+        "a=X-nat:0\r\n" ++
+        "m=audio 4000 RTP/AVP 0\r\n" ++
+        "c=IN IP4 192.168.1.105\r\n" ++
+        "b=TIAS:64000\r\n" ++
+        "a=rtcp:4001 IN IP4 192.168.1.105\r\n" ++
+        "a=sendrecv\r\n" ++
+        "a=rtpmap:0 PCMU/8000\r\n" ++
+        "a=ssrc:2085747712 cname:579a09791ebe8142\r\n";
+
+    var alloc_buf: [8192]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&alloc_buf);
+    const alloc = fba.allocator();
+
+    const parsed = try parseSessionDescription(alloc, data);
+
+    // There's more to test here, but for now I'm just looking at things that
+    // are relevant for our RTP stream
+    try std.testing.expectEqualStrings("4000", parsed.media_descriptions[0].media.port.data(data));
+    try std.testing.expectEqualStrings("RTP/AVP", parsed.media_descriptions[0].media.protocol.data(data));
+    try std.testing.expectEqualStrings("0", parsed.media_descriptions[0].media.formats[0].data(data));
+    try std.testing.expectEqualStrings("192.168.1.105", parsed.media_descriptions[0].connections[0].connection_address.data(data));
+}

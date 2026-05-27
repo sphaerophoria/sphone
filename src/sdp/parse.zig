@@ -330,6 +330,8 @@ fn mediaField(alloc: std.mem.Allocator, tc: *parse.TokenConsumer) !?MediaField {
         try fmts.append(alloc, r);
     }
 
+    _ = parse.crlf(tc) orelse return null;
+
     _ = cp.commit();
 
     return .{
