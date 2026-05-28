@@ -5,8 +5,8 @@ pub fn build(b: *std.Build) !void {
     const opt = b.standardOptimizeOption(.{});
 
     const sphtud = b.dependency("sphtud", .{
-        .with_gl = false,
-        .with_glfw = false,
+        .with_gl = true,
+        .with_glfw = true,
         .unique = "sphone",
     }).module("sphtud");
 

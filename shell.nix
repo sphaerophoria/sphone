@@ -13,6 +13,8 @@ pkgs.mkShell {
     gdb
     python3
     pkg-config
+    glfw
+    libGL
   ];
 
   LD_LIBRARY_PATH = "${pkgs.wayland}/lib:${pkgs.pipewire}/lib:${pkgs.pipewire}/lib/spa-0.2";

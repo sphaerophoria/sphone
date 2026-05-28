@@ -64,8 +64,7 @@ pub fn init(
     );
     const transport_alloc = try alloc.makeSubAlloc("transport service");
     const transport = try TransportService.init(
-        transport_alloc.arena(),
-        transport_alloc.expansion(),
+        transport_alloc.general(),
         spawner,
         loop,
         ids.transport,
@@ -88,7 +87,8 @@ pub fn init(
 }
 
 pub fn startInvite(self: *SipService, params: Transactions.InviteParams, callback_id: usize) !Transactions.InviteHandle {
-    const res = try self.transactions.startInvite(params);
+    var message_buf: [4096]u8 = undefined;
+    const res = try self.transactions.startInvite(params, &message_buf);
     const extra = try self.extra.acquire(self.expansion, res.handle.handle.id);
     extra.* = .{
         .timer_handle = null,

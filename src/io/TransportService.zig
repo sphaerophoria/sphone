@@ -5,7 +5,7 @@ const Transport = @import("../sip/Transport.zig");
 const Self = @This();
 
 // FIXME: We should have our incoming TCP/UDP ports allocated here
-expansion: sphtud.util.ExpansionAlloc,
+gpa: std.mem.Allocator,
 transport: Transport,
 pool: sphtud.util.ObjectPool(Storage, Handle),
 spawner: *sphtud.io.TcpSpawner,
@@ -35,20 +35,19 @@ pub const Ids = struct {
 };
 
 pub fn init(
-    arena: std.mem.Allocator,
-    expansion: sphtud.util.ExpansionAlloc,
+    gpa: std.mem.Allocator,
     spawner: *sphtud.io.TcpSpawner,
     loop: *sphtud.io.Loop,
     comptime ids: Ids,
 ) !Self {
     return .{
-        .expansion = expansion,
+        .gpa = gpa,
         .transport = .init(),
         .data_received_start = ids.data_received.start,
         .connection_ready_start = ids.connection_ready.start,
         .pool = try .init(
-            arena,
-            expansion,
+            gpa,
+            .general(gpa),
             16,
             max_connections,
         ),
@@ -63,20 +62,20 @@ pub fn sendMessage(self: *Self, sip_uri: []const u8, message: Transport.Buffer) 
     switch (res.connection) {
         .new_tcp => |params| {
             // FIXME: Surely we should close these at some point
-            const storage = try self.pool.acquire(self.expansion);
+            const storage = try self.pool.acquire(.general(self.gpa));
             const spawn_handle = self.spawner.spawn(params.host, params.port, self.connection_ready_start + storage.handle.toIdx()) catch |e| {
-                self.pool.release(self.expansion, storage.handle);
+                self.pool.release(.general(self.gpa), storage.handle);
                 return e;
             };
 
             storage.val.initPinned(spawn_handle);
             errdefer self.close(storage.handle);
 
-            try storage.val.writeMessage(self.expansion.alloc, res.data);
+            try storage.val.writeMessage(self.gpa, res.data);
         },
         .existing => |idx| {
             const storage = self.pool.get(.fromIdx(idx));
-            try storage.writeMessage(self.expansion.alloc, res.data);
+            try storage.writeMessage(self.gpa, res.data);
         },
     }
 }
@@ -97,7 +96,7 @@ fn close(self: *Self, handle: Handle) void {
     self.loop.clearEvents(self.data_received_start + handle.toIdx());
     self.loop.clearEvents(self.connection_ready_start + handle.toIdx());
 
-    self.pool.release(self.expansion, handle);
+    self.pool.release(.general(self.gpa), handle);
 }
 
 pub const Event = struct {
@@ -125,7 +124,7 @@ pub fn service(self: *Self, service_id: usize, comptime ids: Ids) !Event {
             const idx = service_id - ids.connection_ready.start;
             const storage = self.pool.get(.fromIdx(idx));
 
-            try storage.onConnectionReady(self.spawner);
+            try storage.onConnectionReady(self.gpa, self.spawner);
 
             switch (storage.socket) {
                 .ready => {
@@ -189,21 +188,22 @@ const Storage = struct {
         self.reader = .invalid;
     }
 
-    pub fn writeMessage(self: *Storage, alloc: std.mem.Allocator, message: []const u8) !void {
+    pub fn writeMessage(self: *Storage, alloc: std.mem.Allocator, tmp_message: []const u8) !void {
         switch (self.socket) {
             .initializing => {
+                const message = try alloc.dupe(u8, tmp_message);
                 errdefer alloc.free(message);
 
                 try self.messages.appendBounded(message);
                 return;
             },
             .ready => |fd| {
-                try sphtud.io.writeAll(message, fd);
+                try sphtud.io.writeAll(tmp_message, fd);
             },
         }
     }
 
-    pub fn onConnectionReady(self: *Storage, tcp_spawner: *sphtud.io.TcpSpawner) !void {
+    pub fn onConnectionReady(self: *Storage, alloc: std.mem.Allocator, tcp_spawner: *sphtud.io.TcpSpawner) !void {
         const handle = switch (self.socket) {
             .initializing => |h| h,
             else => {
@@ -221,6 +221,7 @@ const Storage = struct {
 
         self.reader = .init(self.socket.ready, &self.reader_buf);
         for (self.messages.items) |message| {
+            defer alloc.free(message);
             try sphtud.io.writeAll(message, self.socket.ready);
         }
         self.messages.clearRetainingCapacity();

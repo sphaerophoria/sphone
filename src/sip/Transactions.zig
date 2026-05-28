@@ -158,7 +158,6 @@ pub const InviteParams = struct {
     uri: []const u8,
     to: []const u8,
     from: []const u8,
-    out_buf: []u8,
     sent_by: []const u8,
     rtp_port: u16,
 };
@@ -179,13 +178,13 @@ pub const InviteHandle = struct {
     }
 };
 
-pub fn startInvite(self: *TransactionManager, params: InviteParams) !InviteRes {
+pub fn startInvite(self: *TransactionManager, params: InviteParams, out_buf: []u8) !InviteRes {
     const branch_id = genBranchId(self.rand);
 
     var call_id: [globally_unique_hex_len]u8 = undefined;
     genRandHex(self.rand, &call_id);
 
-    var message_w = std.Io.Writer.fixed(params.out_buf);
+    var message_w = std.Io.Writer.fixed(out_buf);
 
     const cseq = self.rand.int(u16);
     var cseq_buf: [1024]u8 = undefined;

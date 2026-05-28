@@ -18,6 +18,7 @@ const Ids = struct {
     invite_complete: usize,
     rtp: PlaybackRtpStream.Ids,
     audio: usize,
+    service_ui: usize,
 
     pub fn init() Ids {
         var alloc = sphtud.io.IdAlloc{ .idx = 0 };
@@ -30,23 +31,164 @@ const Ids = struct {
             .invite_complete = alloc.allocOne(),
             .rtp = .init(&alloc),
             .audio = alloc.allocOne(),
+            .service_ui = alloc.allocOne(),
         };
     }
 };
 
 const ids = Ids.init();
 
-pub fn main(init: std.process.Init.Minimal) !void {
+// Gui request of gui thread
+const GuiAction = union(enum) {
+    start_call,
+    edit_call_recipiant: sphtud.ui.textbox.TextboxNotifier,
+
+    pub fn makeEditCallRecipiant(notifier: sphtud.ui.textbox.TextboxNotifier) GuiAction {
+        return .{
+            .edit_call_recipiant = notifier,
+        };
+    }
+};
+
+// Gui thread request of main thread
+// FIXME: Surely needs a better name
+const GuiThreadAction = union(enum) {
+    start_call: struct {
+        buf: [128]u8,
+        len: usize,
+    },
+};
+
+const GuiState = struct {
+    mutex: std.Io.Mutex,
+    io: std.Io.Threaded,
+
+    protected: struct {
+        state: enum {
+            default,
+            in_call,
+        },
+
+        action_queue: sphtud.util.CircularBuffer(GuiThreadAction),
+    },
+
+    pub fn popAction(self: *GuiState) !?GuiThreadAction {
+        try self.mutex.lock(self.io.io());
+        defer self.mutex.unlock(self.io.io());
+
+        return self.protected.action_queue.pop();
+    }
+};
+
+pub fn uiMain(gui_state: *GuiState) !void {
+    var allocators: sphtud.render.AppAllocators = undefined;
+    try allocators.initPinned(10 * 1024 * 1024);
+
+    var window: sphtud.window.Window = undefined;
+    try window.initPinned("sphui demo", 800, 600);
+    defer window.deinit();
+
+    try sphtud.render.initGl(window.glLoader());
+
+    const gl = sphtud.render.gl;
+
+    gl.glEnable(gl.GL_SCISSOR_TEST);
+    gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA);
+    gl.glEnable(gl.GL_BLEND);
+
+    const gui_alloc = try allocators.root_render.makeSubAlloc("gui");
+
+    const widget_state = try sphtud.ui.widget_factory.widgetState(
+        GuiAction,
+        gui_alloc,
+        &allocators.scratch,
+        &allocators.scratch_gl,
+        .{},
+    );
+
+    const widget_factory = widget_state.factory(allocators.root_render);
+
+    // FIXME: Center justified layout in space should not be in stack
+    const stack = try widget_factory.makeStack(2);
+
+    try stack.pushWidget(try widget_factory.makeRect(sphtud.ui.widget_factory.StyleColors.background_color, 0), .{
+        .size_policy = .allow_expand,
+        .horizontal_justify = .left,
+        .vertical_justify = .top,
+    });
+
+    const call_layout = try widget_factory.makeLayout();
+    call_layout.cursor.direction = .left_to_right;
+
+    var call_text = std.ArrayList(u8).empty;
+    try call_text.appendSlice(allocators.root.general(), "sip:mick@127.0.0.1:5062");
+
+    try call_layout.pushWidget(try widget_factory.makeTextbox(
+        &call_text.items,
+        &GuiAction.makeEditCallRecipiant,
+    ));
+
+    try call_layout.pushWidget(try widget_factory.makeButton(
+        "call",
+        @as(GuiAction, .start_call),
+    ));
+
+    try stack.pushWidget(call_layout.asWidget(), .{
+        .vertical_justify = .center,
+        .horizontal_justify = .center,
+        .size_policy = .match_siblings,
+    });
+
+    var runner = try widget_factory.makeRunner(stack.asWidget());
+
+    const std_io = gui_state.io.io();
+
+    while (!window.closed()) {
+        allocators.resetScratch();
+        const width, const height = window.getWindowSize();
+
+        gl.glViewport(0, 0, @intCast(width), @intCast(height));
+        gl.glScissor(0, 0, @intCast(width), @intCast(height));
+
+        const background_color = sphtud.ui.widget_factory.StyleColors.background_color;
+        gl.glClearColor(background_color.r, background_color.g, background_color.b, background_color.a);
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT);
+
+        var response = try runner.step(1.0, .{
+            .width = @intCast(width),
+            .height = @intCast(height),
+        }, &window.queue);
+
+        if (response.action) |*a| switch (a.*) {
+            .start_call => {
+                try gui_state.mutex.lock(std_io);
+                defer gui_state.mutex.unlock(std_io);
+
+                var thread_action = GuiThreadAction{
+                    .start_call = undefined,
+                };
+
+                @memcpy(thread_action.start_call.buf[0..call_text.items.len], call_text.items);
+                thread_action.start_call.len = call_text.items.len;
+
+                try gui_state.protected.action_queue.pushNoClobber(thread_action);
+            },
+            .edit_call_recipiant => |*notif| {
+                try sphtud.ui.textbox.executeTextEditOnArrayList(allocators.root.general(), &call_text, notif);
+            },
+        };
+
+        window.swapBuffers();
+    }
+}
+
+pub fn main() !void {
     var tpa: sphtud.alloc.TinyPageAllocator = undefined;
     try tpa.initPinned();
 
     var root_alloc: sphtud.alloc.Sphalloc = undefined;
     try root_alloc.initPinned(tpa.allocator(), "root");
 
-    var args = try init.args.iterateAllocator(root_alloc.general());
-
-    _ = args.next();
-    const callee = args.next() orelse return error.NoCallee;
     const caller = "sip:mick@127.0.0.1";
 
     var rng = blk: {
@@ -69,18 +211,6 @@ pub fn main(init: std.process.Init.Minimal) !void {
         &loop,
         ids.sip,
     );
-
-    var message_buf: [4096]u8 = undefined;
-    const invite_res = try sip_service.startInvite(.{
-        .uri = callee,
-        .to = callee,
-        .from = caller,
-        // FIXME: This feels like a lower level detail
-        .out_buf = &message_buf,
-        // This should probably be resolved by transport
-        .sent_by = "127.0.0.1:5060",
-        .rtp_port = rtp_port,
-    }, ids.invite_complete);
 
     var pw = try sphaudio.Pipewire.init();
     defer pw.deinit();
@@ -106,6 +236,23 @@ pub fn main(init: std.process.Init.Minimal) !void {
         ids.rtp,
     );
 
+    var gui_action_queue_buf: [32]GuiThreadAction = undefined;
+    var gui_state = GuiState{
+        .mutex = .init,
+        .io = .init_single_threaded,
+        .protected = .{
+            .state = .default,
+            .action_queue = .{ .items = &gui_action_queue_buf },
+        },
+    };
+
+    const ui_thread_handle = try std.Thread.spawn(.{}, uiMain, .{&gui_state});
+    defer ui_thread_handle.join();
+
+    const service_ui_timer = try timer.add(.fromMilliseconds(16), ids.service_ui);
+
+    var invite_handle: ?sip.Transactions.InviteHandle = null;
+
     while (true) {
         const event = (try loop.poll(-1)) orelse continue;
         switch (event) {
@@ -124,13 +271,34 @@ pub fn main(init: std.process.Init.Minimal) !void {
             ids.invite_complete => {
                 std.debug.print("Invite complete!\n", .{});
 
-                sip_service.release(invite_res.handle);
+                if (invite_handle) |h| {
+                    sip_service.release(h.handle);
+                }
             },
             ids.rtp.total.start...ids.rtp.total.end => {
                 try playback_stream.service(event, &timer, ids.rtp);
             },
             ids.audio => {
                 try pw.service();
+            },
+            ids.service_ui => {
+                try timer.rearm(service_ui_timer, .fromMilliseconds(16));
+
+                while (try gui_state.popAction()) |action| switch (action) {
+                    .start_call => |params| {
+                        const recipient = params.buf[0..params.len];
+                        std.debug.print("Call {s} please\n", .{recipient});
+
+                        invite_handle = try sip_service.startInvite(.{
+                            .uri = recipient,
+                            .to = recipient,
+                            .from = caller,
+                            // This should probably be resolved by transport
+                            .sent_by = "127.0.0.1:5060",
+                            .rtp_port = rtp_port,
+                        }, ids.invite_complete);
+                    },
+                };
             },
             else => unreachable,
         }
