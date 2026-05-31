@@ -135,40 +135,56 @@ pub fn service(self: *SipService, id: usize, comptime ids: Ids) !void {
             }
         },
         ids.transport.total.start...ids.transport.total.end => {
-            const te = try self.transport.service(id, ids.transport);
-
-            var response_buf: [4096]u8 = undefined;
-
             while (true) {
-                const now = try sphtud.io.clock_gettime(.BOOTTIME);
-                const actions = self.transactions.onMessage(te.r, now, &response_buf) catch |e| {
-                    // FIXME: Somehow get this info back tot ransport to check for actual failure or block
-                    if (e == error.ReadFailed) break;
-                    return e;
-                };
+                const te = try self.transport.service(id, ids.transport) orelse break;
 
-                for (actions) |action| switch (action) {
-                    .schedule_timeout => |t| {
-                        const extra = self.extra.getPtr(t.handle.id);
-                        extra.timer_handle = try self.timer.add(t.duration, ids.timeout.start + t.handle.id);
+                var response_buf: [4096]u8 = undefined;
+
+                const now = try sphtud.io.clock_gettime(.BOOTTIME);
+
+                switch (te) {
+                    .tcp => |tcp_e| while (true) {
+                        const actions = self.transactions.onMessage(tcp_e.r, now, &response_buf) catch |e| {
+                            // FIXME: Dedup error handling
+                            // FIXME: Somehow get this info back tot ransport to check for actual failure or block
+                            if (e == error.ReadFailed) break;
+                            return e;
+                        };
+
+                        try self.handleTransactionActions(actions, tcp_e.handle, ids);
                     },
-                    .send => |buf| {
-                        try self.transport.sendResponse(te.handle, buf);
+                    .udp => |udp_e| {
+                        var r = std.Io.Reader.fixed(udp_e.data);
+                        const actions = try self.transactions.onMessage(&r, now, &response_buf);
+
+                        try self.handleTransactionActions(actions, null, ids);
                     },
-                    .notify => |handle| {
-                        const extra = self.extra.getPtr(handle.id);
-                        try self.loop.pushEvent(extra.callback_id);
-                    },
-                    .finish => |handle| {
-                        self.handleTxFinish(handle);
-                    },
-                };
+                }
             }
         },
         else => unreachable,
     }
 }
 
+
+fn handleTransactionActions(self: *SipService, actions: []const sip.Transactions.ResponseAction, tx_handle: ?TransportService.Handle, comptime ids: Ids) !void {
+    for (actions) |action| switch (action) {
+        .schedule_timeout => |t| {
+            const extra = self.extra.getPtr(t.handle.id);
+            extra.timer_handle = try self.timer.add(t.duration, ids.timeout.start + t.handle.id);
+        },
+        .send => |buf| {
+            try self.transport.sendResponse(tx_handle.?, buf);
+        },
+        .notify => |handle| {
+            const extra = self.extra.getPtr(handle.id);
+            try self.loop.pushEvent(extra.callback_id);
+        },
+        .finish => |handle| {
+            self.handleTxFinish(handle);
+        },
+    };
+}
 fn handleTxFinish(self: *SipService, handle: Transactions.Handle) void {
     const extra = self.extra.getPtr(handle.id);
     extra.completion.finishIo();

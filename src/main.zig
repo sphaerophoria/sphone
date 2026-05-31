@@ -63,6 +63,7 @@ const GuiState = struct {
     mutex: std.Io.Mutex,
     io: std.Io.Threaded,
 
+    shutdown: bool,
     protected: struct {
         state: enum {
             default,
@@ -143,7 +144,7 @@ pub fn uiMain(gui_state: *GuiState) !void {
 
     const std_io = gui_state.io.io();
 
-    while (!window.closed()) {
+    while (!window.closed() and !gui_state.shutdown) {
         allocators.resetScratch();
         const width, const height = window.getWindowSize();
 
@@ -244,10 +245,14 @@ pub fn main() !void {
             .state = .default,
             .action_queue = .{ .items = &gui_action_queue_buf },
         },
+        .shutdown = false,
     };
 
     const ui_thread_handle = try std.Thread.spawn(.{}, uiMain, .{&gui_state});
-    defer ui_thread_handle.join();
+    defer {
+        gui_state.shutdown = true;
+        ui_thread_handle.join();
+    }
 
     const service_ui_timer = try timer.add(.fromMilliseconds(16), ids.service_ui);
 

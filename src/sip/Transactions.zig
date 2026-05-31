@@ -89,19 +89,30 @@ pub fn onMessage(self: *Self, r: *std.Io.Reader, now: std.Io.Timestamp, out_buf:
         // Check method as well
         const dispatch_data = try DispatchData.parse(header) orelse return error.Unimplemented;
 
-        const message = try r.take(header_end + 4 + dispatch_data.content_len);
+        switch (dispatch_data) {
+            .response => |response_data| {
+                const message = try r.take(header_end + 4 + response_data.content_len);
 
-        const handle = self.by_branch.get(dispatch_data.branch.*) orelse return error.MissingTransaction;
-        const tx = self.transactions.get(handle);
+                const handle = self.by_branch.get(response_data.branch.*) orelse return error.MissingTransaction;
+                const tx = self.transactions.get(handle);
 
-        std.debug.print("matched tx: {any}\n", .{tx});
+                std.debug.print("matched tx: {any}\n", .{tx});
 
-        var action_buf: [max_actions]Transaction.Action = undefined;
-        const res = try tx.onMessage(message, now, out_buf, &action_buf);
+                var action_buf: [max_actions]Transaction.Action = undefined;
+                const res = try tx.onMessage(message, now, out_buf, &action_buf);
 
-        const ret = self.convertActions(handle, res);
+                const ret = self.convertActions(handle, res);
 
-        if (ret.len > 0) return ret;
+                if (ret.len > 0) return ret;
+            },
+            .request => {
+                // Create server transaction
+                // State machine for each method that could come in
+                // Figure out which method
+                // Dispatch response
+                //  Maybe there's no state held
+            },
+        }
     }
 }
 
@@ -246,14 +257,34 @@ pub fn startInvite(self: *TransactionManager, params: InviteParams, out_buf: []u
     };
 }
 
-const DispatchData = struct {
-    response_code: u16,
-    branch: *const BranchId,
-    method: sip.Method,
-    content_len: usize,
+const DispatchData = union(enum) {
+    response: struct {
+        response_code: u16,
+        branch: *const BranchId,
+        method: sip.Method,
+        content_len: usize,
+    },
+    request: struct {
+    },
 
     // FIXME: Branch ID and method
     fn parse(message: []const u8) !?DispatchData {
+        const first_line = std.mem.find(u8, message, "\r\n") orelse return error.Invalid;
+        var tc = sip.parse.TokenConsumer.init(message[0..first_line]);
+        if (sip.parse_utils.statusLine(&tc)) |_| {
+            return parseResponse(message);
+        }
+
+        tc = sip.parse.TokenConsumer.init(message[0..first_line]);
+        if (sip.parse_utils.requestLine(&tc)) |_| {
+            std.debug.print("Identified req\n", .{});
+            return parseRequest(message);
+        }
+
+        return error.Invalid;
+    }
+
+    fn parseResponse(message: []const u8) !?DispatchData {
         var rp = try sip.ResponseParser.init(message);
 
         var branch: ?*const BranchId = null;
@@ -291,10 +322,19 @@ const DispatchData = struct {
         }
 
         return .{
-            .response_code = rp.response_code,
-            .branch = branch orelse return null,
-            .method = method orelse return null,
-            .content_len = content_len orelse 0,
+            .response = .{
+                .response_code = rp.response_code,
+                .branch = branch orelse return null,
+                .method = method orelse return null,
+                .content_len = content_len orelse 0,
+            },
+        };
+    }
+
+    fn parseRequest(message: []const u8) !?DispatchData {
+        _ = message;
+        return .{
+            .request = .{},
         };
     }
 };

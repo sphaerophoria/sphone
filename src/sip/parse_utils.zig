@@ -689,6 +689,49 @@ test "ViaParser sanity" {
     try std.testing.expectEqual(null, viaParams(&tc));
 }
 
+pub const RequestLine = struct {
+    method: Range,
+    uri: Range,
+    version: SipVersion,
+};
+
+pub fn notSp(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+
+    while (parse.sp(tc) == null) {
+        tc.idx += 1;
+    }
+
+    // Undo the actual space parse
+    tc.idx -= 1;
+
+    return cp.commit();
+}
+
+pub fn requestLine(tc: *TokenConsumer) ?RequestLine {
+    //Request-Line   =  Method SP Request-URI SP SIP-Version CRLF
+    //
+    var cp = tc.checkpoint();
+    defer cp.restore();
+
+    const req_method = method(tc) orelse return null;
+    _ = parse.sp(tc) orelse return null;
+    // Shortcut proper parsing :)
+    const request_uri = notSp(tc) orelse return null;
+    _ = parse.sp(tc) orelse return null;
+    const version = sipVersion(tc) orelse return null;
+
+    _ = parse.crlf(tc) orelse return null;
+
+    _ = cp.commit();
+
+    return .{
+        .method = req_method,
+        .uri = request_uri,
+        .version = version,
+    };
+}
 pub const StatusLine = struct {
     version: SipVersion,
     status_code: Range,

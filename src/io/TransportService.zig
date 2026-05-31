@@ -11,6 +11,10 @@ pool: sphtud.util.ObjectPool(Storage, Handle),
 spawner: *sphtud.io.TcpSpawner,
 loop: *sphtud.io.Loop,
 
+udp_recv_buf: []u8,
+udp_listener: std.posix.fd_t,
+tcp_listener: std.posix.fd_t,
+
 data_received_start: usize,
 connection_ready_start: usize,
 
@@ -22,6 +26,8 @@ pub const max_connections = 1024;
 pub const Ids = struct {
     connection_ready: sphtud.io.IdAlloc.Range,
     data_received: sphtud.io.IdAlloc.Range,
+    udp_listener: usize,
+    tcp_listener: usize,
     total: sphtud.io.IdAlloc.Range,
 
     pub fn init(alloc: *sphtud.io.IdAlloc) Ids {
@@ -29,6 +35,8 @@ pub const Ids = struct {
         return .{
             .connection_ready = alloc.allocMany(max_connections),
             .data_received = alloc.allocMany(max_connections),
+            .udp_listener = alloc.allocOne(),
+            .tcp_listener = alloc.allocOne(),
             .total = start.range(),
         };
     }
@@ -40,11 +48,43 @@ pub fn init(
     loop: *sphtud.io.Loop,
     comptime ids: Ids,
 ) !Self {
+
+    const system = sphtud.io.system;
+
+    const ip: std.Io.net.IpAddress = .{
+        .ip4 = .{
+            .bytes = .{0, 0, 0, 0},
+            .port = 5060,
+        },
+    };
+
+    const udp_listener = try sphtud.io.socket(system.AF.INET, system.SOCK.DGRAM, 0);
+    try sphtud.io.bind(udp_listener, ip);
+
+    const tcp_listener = try sphtud.io.createTcpListener(ip, 32);
+
+    try loop.register(.{
+        .handle = tcp_listener,
+        .id = ids.tcp_listener,
+        .read = true,
+        .write = false,
+    });
+
+    try loop.register(.{
+        .handle = udp_listener,
+        .id = ids.udp_listener,
+        .read = true,
+        .write = false,
+    });
+
     return .{
         .gpa = gpa,
         .transport = .init(),
         .data_received_start = ids.data_received.start,
         .connection_ready_start = ids.connection_ready.start,
+        .udp_recv_buf = try gpa.alloc(u8, 4096),
+        .udp_listener = udp_listener,
+        .tcp_listener = tcp_listener,
         .pool = try .init(
             gpa,
             .general(gpa),
@@ -99,10 +139,24 @@ fn close(self: *Self, handle: Handle) void {
     self.pool.release(.general(self.gpa), handle);
 }
 
-pub const Event = struct {
+pub const Event = union(enum) {
+    udp: UdpMessage,
+    tcp: TcpMessage,
+};
+
+pub const UdpMessage = struct {
+    data: []const u8,
+};
+
+pub const TcpMessage = struct {
     r: *std.Io.Reader,
     handle: Handle,
 };
+
+// one connection to send back to
+//
+// If we get UDP -> send UDP + IP
+// If we get TCP -> respond over same connection
 
 pub const Handle = struct {
     id: usize,
@@ -118,7 +172,7 @@ pub const Handle = struct {
     }
 };
 
-pub fn service(self: *Self, service_id: usize, comptime ids: Ids) !Event {
+pub fn service(self: *Self, service_id: usize, comptime ids: Ids) !?Event {
     switch (service_id) {
         ids.connection_ready.start...ids.connection_ready.end => {
             const idx = service_id - ids.connection_ready.start;
@@ -136,8 +190,10 @@ pub fn service(self: *Self, service_id: usize, comptime ids: Ids) !Event {
                     });
 
                     return .{
-                        .handle = .fromIdx(idx),
-                        .r = &storage.reader.interface,
+                        .tcp = .{
+                            .handle = .fromIdx(idx),
+                            .r = &storage.reader.interface,
+                        },
                     };
                 },
                 else => {
@@ -146,12 +202,14 @@ pub fn service(self: *Self, service_id: usize, comptime ids: Ids) !Event {
                     // ?*std.Io.Reader but there's no point in making the
                     // caller check for failure twice
                     return .{
-                        .handle = .invalid,
-                        // I swear this const cast is fine. We know that the
-                        // failing reader has no internal state to modify, so the
-                        // pointer to the reader does not actually have to be
-                        // mutable
-                        .r = @constCast(&std.Io.Reader.failing),
+                        .tcp = .{
+                            .handle = .invalid,
+                            // I swear this const cast is fine. We know that the
+                            // failing reader has no internal state to modify, so the
+                            // pointer to the reader does not actually have to be
+                            // mutable
+                            .r = @constCast(&std.Io.Reader.failing),
+                        },
                     };
                 },
             }
@@ -160,9 +218,43 @@ pub fn service(self: *Self, service_id: usize, comptime ids: Ids) !Event {
             const idx = service_id - ids.data_received.start;
             const storage = self.pool.get(.fromIdx(idx));
             return .{
-                .handle = .fromIdx(idx),
-                .r = &storage.reader.interface,
+                .tcp = .{
+                    .handle = .fromIdx(idx),
+                    .r = &storage.reader.interface,
+                },
             };
+        },
+        ids.udp_listener => {
+            std.debug.print("UDP listener triggered\n", .{});
+            const len = try sphtud.io.recvfrom(self.udp_listener, self.udp_recv_buf, 0, null , null);
+            return .{
+                .udp = .{
+                    .data = self.udp_recv_buf[0..len],
+                },
+            };
+        },
+        ids.tcp_listener => {
+            std.debug.print("TCP listener triggered\n", .{});
+
+            while (true) {
+                const new_connection = sphtud.io.accept(self.tcp_listener) catch |e| {
+                    if (e == error.WouldBlock) return null;
+                    return e;
+                };
+
+                const storage = try self.pool.acquire(.general(self.gpa));
+                storage.val.* = .{
+                    .socket = .{
+                        .ready = new_connection,
+                    },
+                    .reader_buf = undefined,
+                    .reader = .init(new_connection, &storage.val.reader_buf),
+                    .messages_buf = undefined,
+                    .messages = .empty,
+                };
+
+                try self.loop.pushEvent(ids.data_received.start + storage.handle.id);
+            }
         },
         else => return error.InvalidId,
     }
