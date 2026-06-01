@@ -106,33 +106,6 @@ pub fn startInvite(self: *SipService, params: sip.transaction.OutgoingInvitePara
     try self.transport.sendMessage(params.uri, res.to_send);
 }
 
-pub fn acceptIncoming(self: *SipService) !void {
-    const incoming_call = self.incoming_call orelse return;
-    const res = try incoming_call.invite.accept();
-
-    try self.transport.sendMessage(res.dest, res.to_send);
-}
-
-pub fn release(self: *SipService, handle: Transactions.Handle) void {
-    const extra = self.extra.getPtr(handle.id);
-    extra.completion.finishUser();
-    if (extra.completion.isFullyComplete()) {
-        self.deinitItem(handle);
-    }
-}
-
-fn deinitItem(self: *SipService, handle: Transactions.Handle) void {
-    const extra = self.extra.getPtr(handle.id);
-    if (extra.timer_handle) |h| {
-        self.timer.remove(h);
-    }
-
-    self.loop.clearEvents(self.start_timeout_id + handle.id);
-
-    self.extra.release(handle.id);
-    self.tx_lookup.deinitRequest(handle);
-}
-
 pub const ServiceResult = union(enum) {
     invite_accepted: *OutgoingInvite,
     invite: *IncomingInvite,
@@ -233,28 +206,6 @@ fn dispatchMessage(self: *SipService, message: []const u8, transport_handle: ?Tr
             },
         }
     }
-
-    //const now = try sphtud.io.clock_gettime(.BOOTTIME);
-    //var response_buf: [4096]u8 = undefined;
-
-    //if (sip_parse.statusLine(&tc)) |_| {
-    //    const actions = try self.tx_lookup.onMessage(message, now, &response_buf);
-    //    try self.handleTransactionActions(actions, transport_handle, ids);
-    //} else if (sip_parse.requestLine(&tc)) |_| {
-
-    //    // FIXME: do new things
-    //    std.debug.print("Got request: {s}\n", .{message});
-    //    const res = try self.server_transactions.onMessage(message);
-    //    switch (res) {
-    //        .INVITE => |call| {
-    //            self.incoming_call = call;
-    //            try self.loop.pushEvent(self.incoming_call_event);
-    //        },
-    //    }
-    //}
-    //else {
-    //    return error.InvalidMessage;
-    //}
 }
 
 pub const Ids = struct {
