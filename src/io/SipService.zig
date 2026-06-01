@@ -103,7 +103,7 @@ pub fn startInvite(self: *SipService, params: sip.transaction.OutgoingInvitePara
 
     const transaction = try self.transactions.acquire(self.alloc.expansion());
     transaction.val.* = .{
-        .outgoing_invite = . {
+        .outgoing_invite = .{
             .alloc = tx_alloc,
             .tx_handle = transaction.handle,
             .timer_handle = null,
@@ -169,8 +169,6 @@ pub fn service(self: *SipService, id: usize, comptime ids: Ids) !?ServiceResult 
                 const te = try self.transport.service(id, ids.transport) orelse return null;
                 std.debug.print("transport service return\n", .{});
 
-
-
                 // Want guy who
                 //  * Parses any sip message
                 //  * breaks into request/response
@@ -218,7 +216,6 @@ fn dispatchMessage(self: *SipService, message: []const u8, transport_handle: ?Tr
 
         switch (method) {
             .INVITE => {
-
                 const tx = try self.transactions.acquire(self.alloc.expansion());
                 errdefer self.transactions.release(self.alloc.expansion(), tx.handle);
 
@@ -238,7 +235,7 @@ fn dispatchMessage(self: *SipService, message: []const u8, transport_handle: ?Tr
             },
             .ACK => {
                 return error.InvalidAck;
-            }
+            },
         }
 
         unreachable; // Implement creating a new transaction from the incoming message

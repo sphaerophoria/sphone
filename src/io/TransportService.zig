@@ -48,12 +48,11 @@ pub fn init(
     loop: *sphtud.io.Loop,
     comptime ids: Ids,
 ) !Self {
-
     const system = sphtud.io.system;
 
     const ip: std.Io.net.IpAddress = .{
         .ip4 = .{
-            .bytes = .{0, 0, 0, 0},
+            .bytes = .{ 0, 0, 0, 0 },
             .port = 5060,
         },
     };
@@ -229,7 +228,7 @@ pub fn service(self: *Self, service_id: usize, comptime ids: Ids) !?Event {
         },
         ids.udp_listener => {
             std.debug.print("UDP listener triggered\n", .{});
-            const len = sphtud.io.recvfrom(self.udp_listener, self.udp_recv_buf, 0, null , null) catch |e| {
+            const len = sphtud.io.recvfrom(self.udp_listener, self.udp_recv_buf, 0, null, null) catch |e| {
                 if (e == error.WouldBlock) return null;
                 return e;
             };

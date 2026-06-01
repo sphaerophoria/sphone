@@ -1,4 +1,3 @@
-
 const DualCompletion = @This();
 val: u8,
 

@@ -40,7 +40,6 @@ pub fn remove(self: *Self, branch_id: []const u8) void {
 }
 
 fn findBranchId(message: []const u8) ![]const u8 {
-
     const without_start = blk: {
         var tc = parsem.TokenConsumer.init(message);
         _ = sip_parse.startLine(&tc) orelse return error.InvalidMessage;

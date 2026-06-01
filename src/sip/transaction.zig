@@ -67,7 +67,7 @@ pub fn makeOutgoingInviteReq(
     try req.writeHeader("Contact", "<sip:streamer@127.0.0.1;transport=tcp>");
     const to_send = try req.finish(body);
 
-    const invite = OutgoingInvite {
+    const invite = OutgoingInvite{
         .negotiated_sdp = &.{},
         .call_id = try arena.dupe(u8, &call_id),
         .sent_by = try arena.dupe(u8, params.sent_by),

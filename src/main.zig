@@ -278,7 +278,6 @@ pub fn main() !void {
 
                         try invite.accept(&sip_service);
                     },
-
                 };
             },
             ids.invite_complete => {

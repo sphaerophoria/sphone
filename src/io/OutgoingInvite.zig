@@ -19,7 +19,13 @@ pub fn deinit(self: *OutgoingInvite, parent: *SipService) void {
     self.destroyIfFullyComplete(parent);
 }
 
-pub fn onMessage(self: *OutgoingInvite, parent: *SipService, message: []const u8, sender: ?TransportService.Handle, on_timeout: usize,) !void {
+pub fn onMessage(
+    self: *OutgoingInvite,
+    parent: *SipService,
+    message: []const u8,
+    sender: ?TransportService.Handle,
+    on_timeout: usize,
+) !void {
     var action_buf: [16]sip.transaction.OutgoingInvite.MessageAction = undefined;
     var out_buf: [4096]u8 = undefined;
 
@@ -32,8 +38,7 @@ pub fn onMessage(self: *OutgoingInvite, parent: *SipService, message: []const u8
 
     for (actions) |action| switch (action) {
         .schedule_timeout => |duration| {
-            if (self.timer_handle) |h| try parent.timer.rearm(h, duration)
-            else self.timer_handle = try parent.timer.add(duration, on_timeout);
+            if (self.timer_handle) |h| try parent.timer.rearm(h, duration) else self.timer_handle = try parent.timer.add(duration, on_timeout);
         },
         .send => |buf| try parent.transport.sendResponse(sender.?, buf),
         .notify => try parent.loop.pushEvent(self.callback_id),
