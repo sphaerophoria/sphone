@@ -833,3 +833,23 @@ pub fn method(tc: *TokenConsumer) ?Range {
     // into a nice enum will be done at a higher layer
     return token(tc);
 }
+
+const FromSpec = struct {
+    from: Range,
+    params: ?Range,
+};
+
+pub fn fromSpec(tc: *TokenConsumer) FromSpec {
+    const from = tc.takeWhileNoneOf(";\r");
+
+    var params: ?Range = null;
+    if (tc.takeChar(';')) |_| {
+        params = tc.takeWhileNoneOf("\r");
+        // Seek till end of line
+    }
+
+    return .{
+        .from = from,
+        .params = params,
+    };
+}

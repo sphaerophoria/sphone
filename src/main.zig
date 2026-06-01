@@ -19,6 +19,7 @@ const Ids = struct {
     rtp: PlaybackRtpStream.Ids,
     audio: usize,
     service_ui: usize,
+    incoming_call: usize,
 
     pub fn init() Ids {
         var alloc = sphtud.io.IdAlloc{ .idx = 0 };
@@ -32,6 +33,7 @@ const Ids = struct {
             .rtp = .init(&alloc),
             .audio = alloc.allocOne(),
             .service_ui = alloc.allocOne(),
+            .incoming_call = alloc.allocOne(),
         };
     }
 };
@@ -210,6 +212,7 @@ pub fn main() !void {
         rng.random(),
         &spawner,
         &loop,
+        ids.incoming_call,
         ids.sip,
     );
 
@@ -304,6 +307,11 @@ pub fn main() !void {
                         }, ids.invite_complete);
                     },
                 };
+            },
+            ids.incoming_call => {
+                std.debug.print("RING RING {s} is calling\n", .{sip_service.incoming_call.?.invite.caller});
+
+                try sip_service.acceptIncoming();
             },
             else => unreachable,
         }

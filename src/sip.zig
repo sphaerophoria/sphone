@@ -1,6 +1,7 @@
 const std = @import("std");
 pub const Transport = @import("sip/Transport.zig");
 pub const Transactions = @import("sip/Transactions.zig");
+pub const ServerTransactions = @import("sip/ServerTransactions.zig");
 pub const parse_utils = @import("sip/parse_utils.zig");
 pub const parse = @import("parse.zig");
 
@@ -88,40 +89,23 @@ pub const ClientRequestWriter = struct {
     }
 };
 
-pub const ResponseParser = struct {
-    response_code: u16,
-
+pub const MessageParser = struct {
     line_reader: std.mem.SplitIterator(u8, .sequence),
 
-    pub fn init(buf: []const u8) !ResponseParser {
-        var tc = parse.TokenConsumer.init(buf);
-        const status_line = parse_utils.statusLine(&tc) orelse return error.InvalidMessage;
-
-        const code_s = status_line.status_code.data(buf);
-        const response_code = try std.fmt.parseInt(u16, code_s, 10);
-
-        var line_reader: std.mem.SplitIterator(u8, .sequence) = if (tc.idx >= buf.len) .{
-            .buffer = "",
-            .index = null,
-            .delimiter = "",
-        } else std.mem.splitSequence(u8, buf[tc.idx..], "\r\n");
-
-        // Status line does not consume \r\n on the first line
-        _ = line_reader.next();
-
+    pub fn init(buf: []const u8) MessageParser {
         return .{
-            .response_code = response_code,
-            .line_reader = line_reader,
+            .line_reader = std.mem.splitSequence(u8, buf, "\r\n"),
         };
     }
 
-    const Header = struct {
+    pub const Header = struct {
         key: Key,
         val: []const u8,
 
         pub const Key = union(enum) {
             via,
             to,
+            from,
             cseq,
             content_length,
             content_type,
@@ -140,6 +124,8 @@ pub const ResponseParser = struct {
             c,
             To,
             t,
+            From,
+            f,
         };
 
         const parsed = std.meta.stringToEnum(Keys, s) orelse return .{ .unknown = s };
@@ -150,10 +136,11 @@ pub const ResponseParser = struct {
             .CSeq => return .cseq,
             .@"Content-Length", .l => return .content_length,
             .@"Content-Type", .c => return .content_type,
+            .From, .f => return .from,
         }
     }
 
-    pub fn nextHeader(self: *ResponseParser) !?Header {
+    pub fn nextHeader(self: *MessageParser) !?Header {
         const line = self.line_reader.next() orelse return null;
         if (line.len == 0) return null;
 
@@ -165,10 +152,32 @@ pub const ResponseParser = struct {
         };
     }
 
-    pub fn readBody(self: *ResponseParser) []const u8 {
+    pub fn readBody(self: *MessageParser) []const u8 {
         const idx = self.line_reader.index orelse return &.{};
         if (idx >= self.line_reader.buffer.len) return &.{};
         return self.line_reader.buffer[idx..];
+    }
+};
+
+pub const ResponseParser = struct {
+    response_code: u16,
+    message_parser: MessageParser,
+
+    pub fn init(buf: []const u8) !ResponseParser {
+        var tc = parse.TokenConsumer.init(buf);
+        const status_line = parse_utils.statusLine(&tc) orelse return error.InvalidMessage;
+
+        const code_s = status_line.status_code.data(buf);
+        const response_code = try std.fmt.parseInt(u16, code_s, 10);
+
+        _ = parse.crlf(&tc);
+
+        const headers_buf = tc.remaining();
+
+        return .{
+            .response_code = response_code,
+            .message_parser = .init(headers_buf),
+        };
     }
 };
 

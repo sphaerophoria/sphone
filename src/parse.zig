@@ -27,6 +27,13 @@ pub const TokenConsumer = struct {
         }
     };
 
+    pub fn remaining(tc: *TokenConsumer) []const u8 {
+        return if (tc.idx >= tc.buf.len)
+            &.{}
+        else
+            tc.buf[tc.idx..];
+    }
+
     pub fn checkpoint(self: *TokenConsumer) Checkpoint {
         return .{
             .tc = self,
@@ -42,6 +49,21 @@ pub const TokenConsumer = struct {
 
         defer self.idx += 1;
         return Idx{self.idx};
+    }
+
+    pub fn takeWhileNoneOf(tc: *TokenConsumer, vals: []const u8) Range {
+        var cp = tc.checkpoint();
+
+        while (tc.idx < tc.buf.len) {
+            for (vals) |c| {
+                if (tc.buf[tc.idx] == c) {
+                    return cp.commit();
+                }
+            }
+            tc.idx += 1;
+        }
+
+        return cp.commit();
     }
 
     // inclusive range

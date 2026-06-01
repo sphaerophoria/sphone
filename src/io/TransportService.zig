@@ -178,10 +178,13 @@ pub fn service(self: *Self, service_id: usize, comptime ids: Ids) !?Event {
             const idx = service_id - ids.connection_ready.start;
             const storage = self.pool.get(.fromIdx(idx));
 
+            if (storage.socket == .ready) return null;
+
             try storage.onConnectionReady(self.gpa, self.spawner);
 
             switch (storage.socket) {
                 .ready => {
+                    std.debug.print("Ready called with {d}\n", .{storage.socket.ready});
                     try self.loop.register(.{
                         .handle = storage.socket.ready,
                         .id = ids.data_received.start + idx,
@@ -226,7 +229,10 @@ pub fn service(self: *Self, service_id: usize, comptime ids: Ids) !?Event {
         },
         ids.udp_listener => {
             std.debug.print("UDP listener triggered\n", .{});
-            const len = try sphtud.io.recvfrom(self.udp_listener, self.udp_recv_buf, 0, null , null);
+            const len = sphtud.io.recvfrom(self.udp_listener, self.udp_recv_buf, 0, null , null) catch |e| {
+                if (e == error.WouldBlock) return null;
+                return e;
+            };
             return .{
                 .udp = .{
                     .data = self.udp_recv_buf[0..len],

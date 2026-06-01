@@ -9,6 +9,7 @@ const TransactionManager = @This();
 
 alloc: *sphtud.alloc.Sphalloc,
 by_branch: sphtud.util.hash_map.AutoHashMap(BranchId, Handle),
+// Transactions where we are the client
 transactions: sphtud.util.ObjectPool(Transaction, Handle),
 rand: std.Random,
 action_buf: []ResponseAction,
@@ -24,6 +25,7 @@ pub const Handle = struct {
         return .{ .id = id };
     }
 };
+
 const Self = @This();
 
 pub fn init(alloc: *sphtud.alloc.Sphalloc, rand: std.Random, typical_transactions: usize, max_transactions: usize) !TransactionManager {
@@ -79,40 +81,46 @@ pub const ResponseAction = union(enum) {
     finish: Handle,
 };
 
-pub fn onMessage(self: *Self, r: *std.Io.Reader, now: std.Io.Timestamp, out_buf: []u8) ![]const ResponseAction {
-    while (true) {
-        const header_end = try peekHeader(r);
+pub fn onMessage(self: *Self, message: []const u8, now: std.Io.Timestamp, out_buf: []u8) ![]const ResponseAction {
+    // Check method as well
+    const dispatch_data = try DispatchData.parse(message) orelse return error.Unimplemented;
 
-        const header = try r.peek(header_end + 4);
-        std.debug.print("Got some data {s}\n", .{header});
+    switch (dispatch_data) {
+        .response => |response_data| {
+            const handle = self.by_branch.get(response_data.branch.*) orelse return error.MissingTransaction;
+            const tx = self.transactions.get(handle);
 
-        // Check method as well
-        const dispatch_data = try DispatchData.parse(header) orelse return error.Unimplemented;
+            std.debug.print("matched tx: {any}\n", .{tx});
 
-        switch (dispatch_data) {
-            .response => |response_data| {
-                const message = try r.take(header_end + 4 + response_data.content_len);
+            var action_buf: [max_actions]Transaction.Action = undefined;
+            const res = try tx.onMessage(message, now, out_buf, &action_buf);
 
-                const handle = self.by_branch.get(response_data.branch.*) orelse return error.MissingTransaction;
-                const tx = self.transactions.get(handle);
+            return self.convertActions(handle, res);
+        },
+        .request => {
+            //// FIXME: Maybe content len should be outside the switch
+            //const message = try r.take(header_end + 4 + request_data.content_len);
 
-                std.debug.print("matched tx: {any}\n", .{tx});
+            //switch (request_data.method) {
+            //    .INVITE => {
+            //        const tx = try self.server_transactions.acquire(self.alloc.expansion());
 
-                var action_buf: [max_actions]Transaction.Action = undefined;
-                const res = try tx.onMessage(message, now, out_buf, &action_buf);
-
-                const ret = self.convertActions(handle, res);
-
-                if (ret.len > 0) return ret;
-            },
-            .request => {
-                // Create server transaction
-                // State machine for each method that could come in
-                // Figure out which method
-                // Dispatch response
-                //  Maybe there's no state held
-            },
-        }
+            //        var action_buf: [max_actions]Transaction.Action = undefined;
+            //        const res =  handleInviteRequest(message, &action_buf);
+            //        tx = res.tx;
+            //        return self.convertActions(.{ .server = tx.handle}, res.actions) ;
+            //    },
+            //    else => {
+            //        return &.{};
+            //    },
+            //}
+            // Create server transaction
+            // State machine for each method that could come in
+            // Figure out which method
+            // Dispatch response
+            //  Maybe there's no state held
+            unreachable;
+        },
     }
 }
 
@@ -293,7 +301,7 @@ const DispatchData = union(enum) {
 
         std.debug.print("response code: {d}\n", .{rp.response_code});
 
-        while (try rp.nextHeader()) |h| {
+        while (try rp.message_parser.nextHeader()) |h| {
             var tc = sip.parse.TokenConsumer.init(h.val);
 
             if (branch == null and h.key == .via) {
@@ -379,7 +387,7 @@ const InviteTransaction = struct {
 
         var to: ?[]const u8 = null;
 
-        while (try rp.nextHeader()) |h| {
+        while (try rp.message_parser.nextHeader()) |h| {
             if (h.key == .to) {
                 to = h.val;
             } else if (h.key == .content_type) {
@@ -391,6 +399,8 @@ const InviteTransaction = struct {
 
         const received_ok = rp.response_code == 200;
 
+        std.debug.print("INVITE res\n{s}\n", .{message});
+
         if (received_ok) {
             var notify = false;
             switch (self.state) {
@@ -398,7 +408,7 @@ const InviteTransaction = struct {
                     self.state = .{ .received_ok = now };
                     // RFC 3261 13.2.2.4 says that we need to keep responding for 64 * T1
                     ret.appendBounded(.{ .schedule_timeout = .fromMilliseconds(t1_ms * 64) }) catch unreachable;
-                    self.negotiated_sdp = rp.readBody();
+                    self.negotiated_sdp = rp.message_parser.readBody();
                     notify = true;
                 },
                 .received_ok => {},
@@ -480,6 +490,28 @@ const Transaction = union(sip.Method) {
             .ACK => unreachable,
         }
     }
+};
+
+pub const ServerInviteTransaction = struct {
+};
+
+
+const InviteRequestResponse = struct {
+    tx: ServerInviteTransaction,
+    actions: []const Transaction.Action,
+
+};
+
+fn handleInviteRequest(message: []const u8, action_buf: []Transaction.Action) InviteRequestResponse {
+    _ = message;
+    _ = action_buf;
+
+    unreachable;
+}
+
+const ServerTransaction = union(sip.Method) {
+    INVITE: ServerInviteTransaction,
+    ACK,
 };
 
 const branch_prefix = "z9hG4bK";
