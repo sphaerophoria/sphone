@@ -755,6 +755,8 @@ pub fn statusLine(tc: *TokenConsumer) ?StatusLine {
     };
     tc.idx = eol;
 
+    _ = parse.crlf(tc) orelse return null;
+
     _ = cp.commit();
 
     return .{
@@ -765,7 +767,7 @@ pub fn statusLine(tc: *TokenConsumer) ?StatusLine {
 }
 
 test "statusLine" {
-    const line = "SIP/2.0 100 Trying";
+    const line = "SIP/2.0 100 Trying\r\n";
     var tc = TokenConsumer.init(line);
 
     const status_line = statusLine(&tc) orelse return error.StatusParseFailed;
@@ -852,4 +854,15 @@ pub fn fromSpec(tc: *TokenConsumer) FromSpec {
         .from = from,
         .params = params,
     };
+}
+
+const StartLine = union(enum) {
+    request: RequestLine,
+    status: StatusLine,
+};
+
+pub fn startLine(tc: *TokenConsumer) ?StartLine {
+    if (requestLine(tc)) |r| return .{ .request = r };
+    if (statusLine(tc)) |r| return .{ .status = r };
+    return null;
 }

@@ -8,47 +8,33 @@ const parse = @import("../parse.zig");
 const sip_parse = @import("../sip/parse_utils.zig");
 
 const SipService = @This();
+const OutgoingInvite = @import("OutgoingInvite.zig");
 
-expansion: sphtud.util.ExpansionAlloc,
-transactions: Transactions,
+alloc: *sphtud.alloc.Sphalloc,
+rand: std.Random,
+tx_lookup: Transactions,
+transactions: sphtud.util.ObjectPool(Transaction, usize),
 server_transactions: ServerTransactions,
 transport: TransportService,
 timer: *sphtud.io.TimerService,
 loop: *sphtud.io.Loop,
 start_timeout_id: usize,
-incoming_call: ?ServerTransactions.InviteHandle,
-incoming_call_event: usize,
 
-extra: sphtud.util.LinearMap(Extra),
+pub const IncomingInvite = struct {
+    alloc: *sphtud.alloc.Sphalloc,
+    invite: sip.transaction.IncomingInvite,
 
-const Extra = struct {
-    timer_handle: ?sphtud.io.TimerService.TimerHandle,
-    callback_id: usize,
-    completion: CompletionStatus,
-};
-
-const CompletionStatus = struct {
-    val: u8,
-
-    const io_finished = 1;
-    const user_finished = 2;
-    const can_be_freed = 3;
-
-    pub const init = CompletionStatus{ .val = 0 };
-
-    fn finishUser(self: *CompletionStatus) void {
-        self.val |= user_finished;
-    }
-
-    fn finishIo(self: *CompletionStatus) void {
-        self.val |= io_finished;
-    }
-
-    fn isFullyComplete(self: *CompletionStatus) bool {
-        return self.val == can_be_freed;
+    pub fn accept(self: *IncomingInvite, parent: *SipService) !void {
+        _ = self;
+        _ = parent;
     }
 };
-pub const Handle = Transactions.Handle;
+const Transaction = union(enum) {
+    outgoing_invite: OutgoingInvite,
+    incoming_invite: IncomingInvite,
+};
+
+pub const TransactionHandle = usize;
 
 const typical_transactions = 32;
 // In what world is a single guy sending 1024 messages at once... then 8x for safety
@@ -60,12 +46,11 @@ pub fn init(
     rand: std.Random,
     spawner: *sphtud.io.TcpSpawner,
     loop: *sphtud.io.Loop,
-    incoming_call_event: usize,
     comptime ids: Ids,
 ) !SipService {
-    const transactions = try Transactions.init(
-        try alloc.makeSubAlloc("transaction manager"),
-        rand,
+    const tx_lookup = try Transactions.init(
+        alloc.arena(),
+        alloc.expansion(),
         typical_transactions,
         max_transactions,
     );
@@ -86,37 +71,53 @@ pub fn init(
     );
 
     return .{
-        .expansion = alloc.expansion(),
-        .transactions = transactions,
-        .server_transactions = server_transactions,
-        .transport = transport,
-        .loop = loop,
-        .timer = timer,
-        .extra = try .init(
+        .alloc = alloc,
+        .rand = rand,
+        .tx_lookup = tx_lookup,
+        .transactions = try .init(
             alloc.arena(),
             alloc.expansion(),
             typical_transactions,
             max_transactions,
         ),
+        .server_transactions = server_transactions,
+        .transport = transport,
+        .loop = loop,
+        .timer = timer,
         .start_timeout_id = ids.timeout.start,
-        .incoming_call = null,
-        .incoming_call_event = incoming_call_event,
     };
 }
 
-pub fn startInvite(self: *SipService, params: Transactions.InviteParams, callback_id: usize) !Transactions.InviteHandle {
+pub fn startInvite(self: *SipService, params: sip.transaction.OutgoingInviteParams, callback_id: usize) !*OutgoingInvite {
     var message_buf: [4096]u8 = undefined;
-    const res = try self.transactions.startInvite(params, &message_buf);
-    const extra = try self.extra.acquire(self.expansion, res.handle.handle.id);
-    extra.* = .{
-        .timer_handle = null,
-        .callback_id = callback_id,
-        .completion = .init,
+
+    const tx_alloc = try self.alloc.makeSubAlloc("invite");
+    errdefer tx_alloc.deinit();
+
+    const res = try sip.transaction.makeOutgoingInviteReq(
+        tx_alloc.arena(),
+        &message_buf,
+        self.rand,
+        params,
+    );
+
+    const transaction = try self.transactions.acquire(self.alloc.expansion());
+    transaction.val.* = .{
+        .outgoing_invite = . {
+            .alloc = tx_alloc,
+            .tx_handle = transaction.handle,
+            .timer_handle = null,
+            .callback_id = callback_id,
+            .completion = .init,
+            .invite = res.invite,
+        },
     };
 
-    try self.transport.sendMessage(res.dest, res.to_send);
+    const storage = &transaction.val.outgoing_invite;
+    try self.tx_lookup.register(storage.invite.branch_id, transaction.handle);
+    try self.transport.sendMessage(params.uri, res.to_send);
 
-    return res.handle;
+    return storage;
 }
 
 pub fn acceptIncoming(self: *SipService) !void {
@@ -143,27 +144,29 @@ fn deinitItem(self: *SipService, handle: Transactions.Handle) void {
     self.loop.clearEvents(self.start_timeout_id + handle.id);
 
     self.extra.release(handle.id);
-    self.transactions.deinitRequest(handle);
+    self.tx_lookup.deinitRequest(handle);
 }
 
-pub fn service(self: *SipService, id: usize, comptime ids: Ids) !void {
+pub const ServiceResult = union(enum) {
+    invite: *IncomingInvite,
+};
+
+pub fn service(self: *SipService, id: usize, comptime ids: Ids) !?ServiceResult {
     std.debug.print("sip service\n", .{});
     switch (id) {
         ids.timeout.start...ids.timeout.end => {
-            const handle = Handle.fromIdx(id - ids.timeout.start);
-            const now = try sphtud.io.clock_gettime(.BOOTTIME);
-            const action = try self.transactions.onTimeout(handle, now);
-            switch (action) {
-                .finish => {
-                    self.handleTxFinish(handle);
-                },
-                .none => {},
+            const handle = id - ids.timeout.start;
+            const tx = self.transactions.get(handle);
+            switch (tx.*) {
+                .outgoing_invite => |*invite| try invite.onTimeout(self),
+                .incoming_invite => unreachable,
             }
+            return null;
         },
         ids.transport.total.start...ids.transport.total.end => {
             while (true) {
                 std.debug.print("transport service\n", .{});
-                const te = try self.transport.service(id, ids.transport) orelse break;
+                const te = try self.transport.service(id, ids.transport) orelse return null;
                 std.debug.print("transport service return\n", .{});
 
 
@@ -177,13 +180,13 @@ pub fn service(self: *SipService, id: usize, comptime ids: Ids) !void {
                     .tcp => |tcp_e| while (true) {
                         const frame = frameTcp(tcp_e.r) catch |e| {
                             // FIXME: Check if this is cause the socket closed or cause of blocking io
-                            if (e == error.ReadFailed) return;
+                            if (e == error.ReadFailed) return null;
                             return e;
                         };
-                        try self.dispatchMessage(frame, tcp_e.handle, ids);
+                        if (try self.dispatchMessage(frame, tcp_e.handle, ids)) |r| return r;
                     },
                     .udp => |udp_e| {
-                        try self.dispatchMessage(udp_e.data, null, ids);
+                        if (try self.dispatchMessage(udp_e.data, null, ids)) |r| return r;
                     },
                 }
             }
@@ -192,57 +195,78 @@ pub fn service(self: *SipService, id: usize, comptime ids: Ids) !void {
     }
 }
 
-fn dispatchMessage(self: *SipService, message: []const u8, transport_handle: ?TransportService.Handle, comptime ids: Ids) !void {
+fn dispatchMessage(self: *SipService, message: []const u8, transport_handle: ?TransportService.Handle, comptime ids: Ids) !?ServiceResult {
     var tc = parse.TokenConsumer.init(message);
 
-    const now = try sphtud.io.clock_gettime(.BOOTTIME);
-    var response_buf: [4096]u8 = undefined;
+    if (try self.tx_lookup.resolve(message)) |transaction_id| {
+        const transaction = self.transactions.get(transaction_id);
 
-    if (sip_parse.statusLine(&tc)) |_| {
-        const actions = try self.transactions.onMessage(message, now, &response_buf);
-        try self.handleTransactionActions(actions, transport_handle, ids);
-    } else if (sip_parse.requestLine(&tc)) |_| {
-
-        // FIXME: do new things
-        std.debug.print("Got request: {s}\n", .{message});
-        const res = try self.server_transactions.onMessage(message);
-        switch (res) {
-            .INVITE => |call| {
-                self.incoming_call = call;
-                try self.loop.pushEvent(self.incoming_call_event);
-            },
+        switch (transaction.*) {
+            .outgoing_invite => |*invite| try invite.onMessage(self, message, transport_handle, transaction_id + ids.timeout.start),
+            .incoming_invite => unreachable,
         }
-    }
-    else {
-        return error.InvalidMessage;
-    }
-}
+    } else {
+        const start_line = sip_parse.startLine(&tc) orelse return error.InvalidMessage;
 
-fn handleTransactionActions(self: *SipService, actions: []const sip.Transactions.ResponseAction, tx_handle: ?TransportService.Handle, comptime ids: Ids) !void {
-    for (actions) |action| switch (action) {
-        .schedule_timeout => |t| {
-            const extra = self.extra.getPtr(t.handle.id);
-            extra.timer_handle = try self.timer.add(t.duration, ids.timeout.start + t.handle.id);
-        },
-        .send => |buf| {
-            try self.transport.sendResponse(tx_handle.?, buf);
-        },
-        .notify => |handle| {
-            const extra = self.extra.getPtr(handle.id);
-            try self.loop.pushEvent(extra.callback_id);
-        },
-        .finish => |handle| {
-            self.handleTxFinish(handle);
-        },
-    };
-}
-fn handleTxFinish(self: *SipService, handle: Transactions.Handle) void {
-    const extra = self.extra.getPtr(handle.id);
-    extra.completion.finishIo();
+        const request_line = switch (start_line) {
+            .request => |r| r,
+            .status => return error.MissingTransaction,
+        };
 
-    if (extra.completion.isFullyComplete()) {
-        self.deinitItem(handle);
+        // FIXME: We're probably supposed to do something interesting here
+        const method = std.meta.stringToEnum(sip.Method, request_line.method.data(message)) orelse return error.UnsupportedMethod;
+
+        switch (method) {
+            .INVITE => {
+
+                const tx = try self.transactions.acquire(self.alloc.expansion());
+                errdefer self.transactions.release(self.alloc.expansion(), tx.handle);
+
+                const alloc = try self.alloc.makeSubAlloc("incoming invite");
+                errdefer alloc.deinit();
+
+                tx.val.* = .{
+                    .incoming_invite = .{
+                        .alloc = alloc,
+                        .invite = try sip.transaction.IncomingInvite.init(alloc.arena(), message),
+                    },
+                };
+
+                return .{
+                    .invite = &tx.val.incoming_invite,
+                };
+            },
+            .ACK => {
+                return error.InvalidAck;
+            }
+        }
+
+        unreachable; // Implement creating a new transaction from the incoming message
     }
+
+    return null;
+
+    //const now = try sphtud.io.clock_gettime(.BOOTTIME);
+    //var response_buf: [4096]u8 = undefined;
+
+    //if (sip_parse.statusLine(&tc)) |_| {
+    //    const actions = try self.tx_lookup.onMessage(message, now, &response_buf);
+    //    try self.handleTransactionActions(actions, transport_handle, ids);
+    //} else if (sip_parse.requestLine(&tc)) |_| {
+
+    //    // FIXME: do new things
+    //    std.debug.print("Got request: {s}\n", .{message});
+    //    const res = try self.server_transactions.onMessage(message);
+    //    switch (res) {
+    //        .INVITE => |call| {
+    //            self.incoming_call = call;
+    //            try self.loop.pushEvent(self.incoming_call_event);
+    //        },
+    //    }
+    //}
+    //else {
+    //    return error.InvalidMessage;
+    //}
 }
 
 pub const Ids = struct {
@@ -274,12 +298,7 @@ fn frameTcp(r: *std.Io.Reader) ![]const u8 {
 
         const header = r.buffered()[0..idx];
         var tc = parse.TokenConsumer.init(header);
-        if (sip_parse.statusLine(&tc)) |_| {}
-        else if ( sip_parse.requestLine(&tc)) |_| {}
-        else {
-            return error.InvalidMessage;
-        }
-
+        _ = sip_parse.startLine(&tc) orelse return error.InvalidMessage;
 
         var mp = sip.MessageParser.init(tc.remaining());
         while (try mp.nextHeader()) |h| switch (h.key) {

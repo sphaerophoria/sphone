@@ -4,6 +4,7 @@ pub const Transactions = @import("sip/Transactions.zig");
 pub const ServerTransactions = @import("sip/ServerTransactions.zig");
 pub const parse_utils = @import("sip/parse_utils.zig");
 pub const parse = @import("parse.zig");
+pub const transaction = @import("sip/transaction.zig");
 
 pub const RequestWriter = struct {
     w: *std.Io.Writer,
@@ -185,3 +186,42 @@ pub const Method = enum {
     INVITE,
     ACK,
 };
+
+pub const branch_prefix = "z9hG4bK";
+pub const globally_unique_hex_len = 32;
+pub const branch_id_len = branch_prefix.len + globally_unique_hex_len;
+
+// Branch ID is sized according to our generation. AFAICT, all correlation
+// is done from the UAC role. When we are working as a UAS, requests come
+// in with new branch IDs, and we just have to copy paste them out. The
+// only time we need to actually correlate responses is when we are GETTING
+// the response, not GIVING the response
+pub const BranchId = [branch_id_len]u8;
+
+// pjsip uses a GUID which is 122 bits of random data 16 bytes is 128 bits of
+// random data so our chances of colliding are astronomically low.
+//
+// Branch IDs are supposed to be globally unique, however we suspect that there
+// are security concerns with using sequential IDs so we do what pjsip does,
+// but a little different
+pub fn genBranchId(rng: std.Random) BranchId {
+    var ret: [branch_id_len]u8 = undefined;
+    @memcpy(ret[0..branch_prefix.len], branch_prefix);
+
+    genRandHex(rng, ret[branch_prefix.len..]);
+
+    return ret;
+}
+
+pub fn genRandHex(rng: std.Random, buf: []u8) void {
+    std.debug.assert(buf.len % 2 == 0);
+
+    const rand_start = buf.len / 2;
+    const rand_len = buf.len / 2;
+    rng.bytes(buf[rand_start..]);
+
+    for (0..rand_len) |i| {
+        const s = buf[rand_start + i];
+        @memcpy(buf[2 * i ..][0..2], &std.fmt.hex(s));
+    }
+}

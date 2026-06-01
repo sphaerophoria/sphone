@@ -6,6 +6,7 @@ const SipService = @import("io/SipService.zig");
 const PlaybackRtpStream = @import("io/PlaybackRtpStream.zig");
 const sphaudio = @import("sphaudio");
 const rtp = @import("rtp.zig");
+const io = @import("io.zig");
 
 const max_dns_connections = 1024;
 const rtp_port = 48102;
@@ -19,7 +20,6 @@ const Ids = struct {
     rtp: PlaybackRtpStream.Ids,
     audio: usize,
     service_ui: usize,
-    incoming_call: usize,
 
     pub fn init() Ids {
         var alloc = sphtud.io.IdAlloc{ .idx = 0 };
@@ -33,7 +33,6 @@ const Ids = struct {
             .rtp = .init(&alloc),
             .audio = alloc.allocOne(),
             .service_ui = alloc.allocOne(),
-            .incoming_call = alloc.allocOne(),
         };
     }
 };
@@ -212,7 +211,6 @@ pub fn main() !void {
         rng.random(),
         &spawner,
         &loop,
-        ids.incoming_call,
         ids.sip,
     );
 
@@ -259,7 +257,7 @@ pub fn main() !void {
 
     const service_ui_timer = try timer.add(.fromMilliseconds(16), ids.service_ui);
 
-    var invite_handle: ?sip.Transactions.InviteHandle = null;
+    var outgoing_invite: ?*io.OutgoingInvite = null;
 
     while (true) {
         const event = (try loop.poll(-1)) orelse continue;
@@ -274,13 +272,20 @@ pub fn main() !void {
                 try spawner.service(event, ids.tcp_spawner);
             },
             ids.sip.total.start...ids.sip.total.end => {
-                try sip_service.service(event, ids.sip);
+                while (try sip_service.service(event, ids.sip)) |result| switch (result) {
+                    .invite => |invite| {
+                        std.debug.print("RING RING {s} is calling\n", .{invite.invite.from});
+
+                        try invite.accept(&sip_service);
+                    },
+
+                };
             },
             ids.invite_complete => {
                 std.debug.print("Invite complete!\n", .{});
 
-                if (invite_handle) |h| {
-                    sip_service.release(h.handle);
+                if (outgoing_invite) |i| {
+                    i.deinit(&sip_service);
                 }
             },
             ids.rtp.total.start...ids.rtp.total.end => {
@@ -297,7 +302,7 @@ pub fn main() !void {
                         const recipient = params.buf[0..params.len];
                         std.debug.print("Call {s} please\n", .{recipient});
 
-                        invite_handle = try sip_service.startInvite(.{
+                        outgoing_invite = try sip_service.startInvite(.{
                             .uri = recipient,
                             .to = recipient,
                             .from = caller,
@@ -307,11 +312,6 @@ pub fn main() !void {
                         }, ids.invite_complete);
                     },
                 };
-            },
-            ids.incoming_call => {
-                std.debug.print("RING RING {s} is calling\n", .{sip_service.incoming_call.?.invite.caller});
-
-                try sip_service.acceptIncoming();
             },
             else => unreachable,
         }
