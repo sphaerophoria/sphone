@@ -2,7 +2,6 @@ const std = @import("std");
 const sphtud = @import("sphtud");
 const sip = @import("../sip.zig");
 const Transactions = sip.Transactions;
-const ServerTransactions = sip.ServerTransactions;
 const TransportService = @import("TransportService.zig");
 const parse = @import("../parse.zig");
 const sip_parse = @import("../sip/parse_utils.zig");
@@ -14,7 +13,6 @@ alloc: *sphtud.alloc.Sphalloc,
 rand: std.Random,
 tx_lookup: Transactions,
 transactions: sphtud.util.ObjectPool(Transaction, usize),
-server_transactions: ServerTransactions,
 transport: TransportService,
 timer: *sphtud.io.TimerService,
 loop: *sphtud.io.Loop,
@@ -55,13 +53,6 @@ pub fn init(
         max_transactions,
     );
 
-    const server_tx_alloc = try alloc.makeSubAlloc("server transaction manager");
-
-    const server_transactions = try ServerTransactions.init(
-        server_tx_alloc,
-        typical_transactions,
-        max_transactions,
-    );
     const transport_alloc = try alloc.makeSubAlloc("transport service");
     const transport = try TransportService.init(
         transport_alloc.general(),
@@ -80,7 +71,6 @@ pub fn init(
             typical_transactions,
             max_transactions,
         ),
-        .server_transactions = server_transactions,
         .transport = transport,
         .loop = loop,
         .timer = timer,

@@ -1,7 +1,6 @@
 const std = @import("std");
 pub const Transport = @import("sip/Transport.zig");
 pub const Transactions = @import("sip/Transactions.zig");
-pub const ServerTransactions = @import("sip/ServerTransactions.zig");
 pub const parse_utils = @import("sip/parse_utils.zig");
 pub const parse = @import("parse.zig");
 pub const transaction = @import("sip/transaction.zig");
