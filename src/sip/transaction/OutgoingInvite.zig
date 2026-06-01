@@ -33,7 +33,7 @@ pub const MessageAction = union(enum) {
     schedule_timeout: std.Io.Duration,
     send: Transport.Buffer,
     // Tell the caller to look at us
-    notify,
+    accepted,
 };
 
 pub const TimeoutAction = enum {
@@ -71,14 +71,14 @@ pub fn onMessage(
     std.debug.print("INVITE res\n{s}\n", .{message});
 
     if (received_ok) {
-        var notify = false;
+        var notify_accepted = false;
         switch (self.state) {
             .wait_ok => {
                 self.state = .{ .received_ok = now };
                 // RFC 3261 13.2.2.4 says that we need to keep responding for 64 * T1
                 ret.appendBounded(.{ .schedule_timeout = .fromMilliseconds(t1_ms * 64) }) catch unreachable;
                 self.negotiated_sdp = rp.message_parser.readBody();
-                notify = true;
+                notify_accepted = true;
             },
             .received_ok => {},
         }
@@ -108,8 +108,8 @@ pub fn onMessage(
         try req.writeHeader("Content-Length", "0");
         ret.appendBounded(.{ .send = try req.finish("") }) catch unreachable;
 
-        if (notify) {
-            ret.appendBounded(.notify) catch unreachable;
+        if (notify_accepted) {
+            ret.appendBounded(.accepted) catch unreachable;
         }
     }
 

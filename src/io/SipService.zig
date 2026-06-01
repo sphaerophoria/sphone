@@ -78,7 +78,7 @@ pub fn init(
     };
 }
 
-pub fn startInvite(self: *SipService, params: sip.transaction.OutgoingInviteParams, callback_id: usize) !*OutgoingInvite {
+pub fn startInvite(self: *SipService, params: sip.transaction.OutgoingInviteParams) !void {
     var message_buf: [4096]u8 = undefined;
 
     const tx_alloc = try self.alloc.makeSubAlloc("invite");
@@ -97,8 +97,6 @@ pub fn startInvite(self: *SipService, params: sip.transaction.OutgoingInvitePara
             .alloc = tx_alloc,
             .tx_handle = transaction.handle,
             .timer_handle = null,
-            .callback_id = callback_id,
-            .completion = .init,
             .invite = res.invite,
         },
     };
@@ -106,8 +104,6 @@ pub fn startInvite(self: *SipService, params: sip.transaction.OutgoingInvitePara
     const storage = &transaction.val.outgoing_invite;
     try self.tx_lookup.register(storage.invite.branch_id, transaction.handle);
     try self.transport.sendMessage(params.uri, res.to_send);
-
-    return storage;
 }
 
 pub fn acceptIncoming(self: *SipService) !void {
@@ -138,6 +134,7 @@ fn deinitItem(self: *SipService, handle: Transactions.Handle) void {
 }
 
 pub const ServiceResult = union(enum) {
+    invite_accepted: *OutgoingInvite,
     invite: *IncomingInvite,
 };
 
@@ -190,7 +187,15 @@ fn dispatchMessage(self: *SipService, message: []const u8, transport_handle: ?Tr
         const transaction = self.transactions.get(transaction_id);
 
         switch (transaction.*) {
-            .outgoing_invite => |*invite| try invite.onMessage(self, message, transport_handle, transaction_id + ids.timeout.start),
+            .outgoing_invite => |*invite| {
+                const result = try invite.onMessage(self, message, transport_handle, transaction_id + ids.timeout.start);
+                switch (result) {
+                    .accepted => return .{
+                        .invite_accepted = invite,
+                    },
+                    .none => return null,
+                }
+            },
             .incoming_invite => unreachable,
         }
     } else {
@@ -227,11 +232,7 @@ fn dispatchMessage(self: *SipService, message: []const u8, transport_handle: ?Tr
                 return error.InvalidAck;
             },
         }
-
-        unreachable; // Implement creating a new transaction from the incoming message
     }
-
-    return null;
 
     //const now = try sphtud.io.clock_gettime(.BOOTTIME);
     //var response_buf: [4096]u8 = undefined;

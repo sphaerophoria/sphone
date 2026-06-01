@@ -8,16 +8,14 @@ const Impl = sip.transaction.OutgoingInvite;
 alloc: *sphtud.alloc.Sphalloc,
 tx_handle: SipService.TransactionHandle,
 timer_handle: ?sphtud.io.TimerService.TimerHandle,
-callback_id: usize,
-completion: DualCompletion,
 invite: Impl,
 
 const OutgoingInvite = @This();
 
-pub fn deinit(self: *OutgoingInvite, parent: *SipService) void {
-    self.completion.finishUser();
-    self.destroyIfFullyComplete(parent);
-}
+pub const MessageResult = enum {
+    accepted,
+    none,
+};
 
 pub fn onMessage(
     self: *OutgoingInvite,
@@ -25,7 +23,7 @@ pub fn onMessage(
     message: []const u8,
     sender: ?TransportService.Handle,
     on_timeout: usize,
-) !void {
+) !MessageResult {
     var action_buf: [16]sip.transaction.OutgoingInvite.MessageAction = undefined;
     var out_buf: [4096]u8 = undefined;
 
@@ -41,8 +39,10 @@ pub fn onMessage(
             if (self.timer_handle) |h| try parent.timer.rearm(h, duration) else self.timer_handle = try parent.timer.add(duration, on_timeout);
         },
         .send => |buf| try parent.transport.sendResponse(sender.?, buf),
-        .notify => try parent.loop.pushEvent(self.callback_id),
+        .accepted => return .accepted
     };
+
+    return .none;
 }
 
 pub fn onTimeout(self: *OutgoingInvite, parent: *SipService) !void {
@@ -50,21 +50,18 @@ pub fn onTimeout(self: *OutgoingInvite, parent: *SipService) !void {
 
     switch (try self.invite.onTimeout(now)) {
         .finish => {
-            self.completion.finishUser();
-            self.destroyIfFullyComplete(parent);
+            self.deinit(parent);
         },
         .none => {},
     }
 }
 
-fn destroyIfFullyComplete(self: *OutgoingInvite, parent: *SipService) void {
-    if (!self.completion.isFullyComplete()) {
-        return;
-    }
-
+// Note that this is intentionally not a public function. This is only called
+// on timeout, and we should not have a handle to this invite outside of the
+// context of the SipService service loop
+fn deinit(self: *OutgoingInvite, parent: *SipService) void {
     parent.tx_lookup.remove(self.invite.branch_id);
     if (self.timer_handle) |h| parent.timer.remove(h);
-    parent.loop.clearEvents(self.callback_id);
 
     self.alloc.deinit();
     parent.transactions.release(parent.alloc.expansion(), self.tx_handle);

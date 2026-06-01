@@ -257,8 +257,6 @@ pub fn main() !void {
 
     const service_ui_timer = try timer.add(.fromMilliseconds(16), ids.service_ui);
 
-    var outgoing_invite: ?*io.OutgoingInvite = null;
-
     while (true) {
         const event = (try loop.poll(-1)) orelse continue;
         switch (event) {
@@ -278,14 +276,11 @@ pub fn main() !void {
 
                         try invite.accept(&sip_service);
                     },
+                    .invite_accepted => |invite| {
+                        _ = invite;
+                        std.debug.print("Invite complete!\n", .{});
+                    },
                 };
-            },
-            ids.invite_complete => {
-                std.debug.print("Invite complete!\n", .{});
-
-                if (outgoing_invite) |i| {
-                    i.deinit(&sip_service);
-                }
             },
             ids.rtp.total.start...ids.rtp.total.end => {
                 try playback_stream.service(event, &timer, ids.rtp);
@@ -301,14 +296,14 @@ pub fn main() !void {
                         const recipient = params.buf[0..params.len];
                         std.debug.print("Call {s} please\n", .{recipient});
 
-                        outgoing_invite = try sip_service.startInvite(.{
+                        try sip_service.startInvite(.{
                             .uri = recipient,
                             .to = recipient,
                             .from = caller,
                             // This should probably be resolved by transport
                             .sent_by = "127.0.0.1:5060",
                             .rtp_port = rtp_port,
-                        }, ids.invite_complete);
+                        });
                     },
                 };
             },
