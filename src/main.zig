@@ -11,6 +11,13 @@ const io = @import("io.zig");
 const max_dns_connections = 1024;
 const rtp_port = 48102;
 
+const GuiIds = struct {
+    ignore: usize = 0,
+    start_call: usize = 1,
+};
+
+const gui_ids = GuiIds{};
+
 const Ids = struct {
     timer: usize,
     dns: sphtud.io.DnsService.Ids,
@@ -100,48 +107,32 @@ pub fn uiMain(gui_state: *GuiState) !void {
 
     const gui_alloc = try allocators.root_render.makeSubAlloc("gui");
 
-    const widget_state = try sphtud.ui.widget_factory.widgetState(
-        GuiAction,
+    const widget_state = try sphtud.ui.WidgetState.init(
         gui_alloc,
         &allocators.scratch,
         &allocators.scratch_gl,
         .{},
     );
 
-    const widget_factory = widget_state.factory(allocators.root_render);
-
-    // FIXME: Center justified layout in space should not be in stack
-    const stack = try widget_factory.makeStack(2);
-
-    try stack.pushWidget(try widget_factory.makeRect(sphtud.ui.widget_factory.StyleColors.background_color, 0), .{
-        .size_policy = .allow_expand,
-        .horizontal_justify = .left,
-        .vertical_justify = .top,
-    });
+    const widget_factory = sphtud.ui.WidgetFactory {
+        .alloc = gui_alloc,
+        .state = widget_state,
+    };
 
     const call_layout = try widget_factory.makeLayout();
     call_layout.cursor.direction = .left_to_right;
 
-    var call_text = std.ArrayList(u8).empty;
-    try call_text.appendSlice(allocators.root.general(), "sip:mick@127.0.0.1:5062");
+    const textbox = try widget_factory.makeTextbox(gui_ids.ignore);
+    try textbox.setText("sip:mick@127.0.0.1:5062");
 
-    try call_layout.pushWidget(try widget_factory.makeTextbox(
-        &call_text.items,
-        &GuiAction.makeEditCallRecipiant,
-    ));
+    try call_layout.append(&textbox.widget);
 
-    try call_layout.pushWidget(try widget_factory.makeButton(
-        "call",
-        @as(GuiAction, .start_call),
-    ));
+    const start_call_label = try widget_factory.makeLabel("call", .{});
+    const start_call = try widget_factory.makeButton(&start_call_label.widget, gui_ids.start_call);
+    try call_layout.append(&start_call.widget);
 
-    try stack.pushWidget(call_layout.asWidget(), .{
-        .vertical_justify = .center,
-        .horizontal_justify = .center,
-        .size_policy = .match_siblings,
-    });
-
-    var runner = try widget_factory.makeRunner(stack.asWidget());
+    const centered = try widget_factory.makeCentered(&call_layout.widget);
+    var runner = try widget_factory.makeRunner(&centered.widget);
 
     const std_io = gui_state.io.io();
 
@@ -152,17 +143,17 @@ pub fn uiMain(gui_state: *GuiState) !void {
         gl.glViewport(0, 0, @intCast(width), @intCast(height));
         gl.glScissor(0, 0, @intCast(width), @intCast(height));
 
-        const background_color = sphtud.ui.widget_factory.StyleColors.background_color;
+        const background_color = sphtud.ui.WidgetState.StyleColors.background_color;
         gl.glClearColor(background_color.r, background_color.g, background_color.b, background_color.a);
         gl.glClear(gl.GL_COLOR_BUFFER_BIT);
 
-        var response = try runner.step(1.0, .{
+        try runner.step(1.0, .{
             .width = @intCast(width),
             .height = @intCast(height),
         }, &window.queue);
 
-        if (response.action) |*a| switch (a.*) {
-            .start_call => {
+        for (widget_state.event_queue.items) |event| switch (event) {
+            gui_ids.start_call => {
                 try gui_state.mutex.lock(std_io);
                 defer gui_state.mutex.unlock(std_io);
 
@@ -170,14 +161,13 @@ pub fn uiMain(gui_state: *GuiState) !void {
                     .start_call = undefined,
                 };
 
-                @memcpy(thread_action.start_call.buf[0..call_text.items.len], call_text.items);
-                thread_action.start_call.len = call_text.items.len;
+                @memcpy(thread_action.start_call.buf[0..textbox.text.items.len], textbox.text.items);
+                thread_action.start_call.len = textbox.text.items.len;
 
                 try gui_state.protected.action_queue.pushNoClobber(thread_action);
             },
-            .edit_call_recipiant => |*notif| {
-                try sphtud.ui.textbox.executeTextEditOnArrayList(allocators.root.general(), &call_text, notif);
-            },
+            gui_ids.ignore => {},
+            else => unreachable,
         };
 
         window.swapBuffers();
