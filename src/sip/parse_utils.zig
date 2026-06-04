@@ -836,24 +836,460 @@ pub fn method(tc: *TokenConsumer) ?Range {
     return token(tc);
 }
 
-const FromSpec = struct {
-    from: Range,
-    params: ?Range,
+// === URI parsing helpers (RFC 3261 §25) ===
+
+// escaped = "%" HEXDIG HEXDIG
+fn escaped(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = tc.takeChar('%') orelse return null;
+    _ = parse.hexdig(tc) orelse return null;
+    _ = parse.hexdig(tc) orelse return null;
+    return cp.commit();
+}
+
+// mark = "-" / "_" / "." / "!" / "~" / "*" / "'" / "(" / ")"
+fn uriMark(tc: *TokenConsumer) ?Idx {
+    if (tc.takeChar('-')) |i| return i;
+    if (tc.takeChar('_')) |i| return i;
+    if (tc.takeChar('.')) |i| return i;
+    if (tc.takeChar('!')) |i| return i;
+    if (tc.takeChar('~')) |i| return i;
+    if (tc.takeChar('*')) |i| return i;
+    if (tc.takeChar('\'')) |i| return i;
+    if (tc.takeChar('(')) |i| return i;
+    if (tc.takeChar(')')) |i| return i;
+    return null;
+}
+
+// unreserved = alphanum / mark
+fn uriUnreserved(tc: *TokenConsumer) ?Idx {
+    if (alphanum(tc)) |i| return i;
+    if (uriMark(tc)) |i| return i;
+    return null;
+}
+
+// user-unreserved = "&" / "=" / "+" / "$" / "," / ";" / "?" / "/"
+fn userUnreserved(tc: *TokenConsumer) ?Idx {
+    if (tc.takeChar('&')) |i| return i;
+    if (tc.takeChar('=')) |i| return i;
+    if (tc.takeChar('+')) |i| return i;
+    if (tc.takeChar('$')) |i| return i;
+    if (tc.takeChar(',')) |i| return i;
+    if (tc.takeChar(';')) |i| return i;
+    if (tc.takeChar('?')) |i| return i;
+    if (tc.takeChar('/')) |i| return i;
+    return null;
+}
+
+fn sipUserCharOnce(tc: *TokenConsumer) bool {
+    if (uriUnreserved(tc) != null) return true;
+    if (escaped(tc) != null) return true;
+    if (userUnreserved(tc) != null) return true;
+    return false;
+}
+
+// user = 1*( unreserved / escaped / user-unreserved )
+fn sipUser(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    if (!sipUserCharOnce(tc)) return null;
+    while (sipUserCharOnce(tc)) {}
+    return cp.commit();
+}
+
+fn sipPasswordCharOnce(tc: *TokenConsumer) bool {
+    if (uriUnreserved(tc) != null) return true;
+    if (escaped(tc) != null) return true;
+    if (tc.takeChar('&') != null) return true;
+    if (tc.takeChar('=') != null) return true;
+    if (tc.takeChar('+') != null) return true;
+    if (tc.takeChar('$') != null) return true;
+    if (tc.takeChar(',') != null) return true;
+    return false;
+}
+
+// password = *( unreserved / escaped / "&" / "=" / "+" / "$" / "," )
+fn sipPasswordStr(tc: *TokenConsumer) Range {
+    var cp = tc.checkpoint();
+    while (sipPasswordCharOnce(tc)) {}
+    return cp.commit();
+}
+
+// userinfo = ( user / telephone-subscriber ) [ ":" password ] "@"
+fn sipUserinfo(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = sipUser(tc) orelse return null;
+    var pp = tc.checkpoint();
+    defer pp.restore();
+    if (tc.takeChar(':') != null) {
+        _ = sipPasswordStr(tc);
+        _ = pp.commit();
+    }
+    _ = tc.takeChar('@') orelse return null;
+    return cp.commit();
+}
+
+// hostport = host [ ":" port ]
+fn hostport(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = host(tc) orelse return null;
+    var pp = tc.checkpoint();
+    defer pp.restore();
+    if (tc.takeChar(':') != null and port(tc) != null) {
+        _ = pp.commit();
+    }
+    return cp.commit();
+}
+
+// paramchar = param-unreserved / unreserved / escaped
+// param-unreserved = "[" / "]" / "/" / ":" / "&" / "+" / "$"
+fn paramCharOnce(tc: *TokenConsumer) bool {
+    if (tc.takeChar('[') != null) return true;
+    if (tc.takeChar(']') != null) return true;
+    if (tc.takeChar('/') != null) return true;
+    if (tc.takeChar(':') != null) return true;
+    if (tc.takeChar('&') != null) return true;
+    if (tc.takeChar('+') != null) return true;
+    if (tc.takeChar('$') != null) return true;
+    if (uriUnreserved(tc) != null) return true;
+    if (escaped(tc) != null) return true;
+    return false;
+}
+
+// other-param = pname [ "=" pvalue ]  (pname/pvalue = 1*paramchar)
+fn uriOtherParam(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    if (!paramCharOnce(tc)) return null;
+    while (paramCharOnce(tc)) {}
+    var vp = tc.checkpoint();
+    defer vp.restore();
+    if (tc.takeChar('=') != null and paramCharOnce(tc)) {
+        while (paramCharOnce(tc)) {}
+        _ = vp.commit();
+    }
+    return cp.commit();
+}
+
+// uri-parameters = *( ";" uri-parameter )
+fn uriParameters(tc: *TokenConsumer) Range {
+    var cp = tc.checkpoint();
+    while (true) {
+        var iter_cp = tc.checkpoint();
+        defer iter_cp.restore();
+        _ = tc.takeChar(';') orelse break;
+        _ = uriOtherParam(tc) orelse break;
+        _ = iter_cp.commit();
+    }
+    return cp.commit();
+}
+
+// hnv-unreserved = "[" / "]" / "/" / "?" / ":" / "+" / "$"
+fn hnvUnreserved(tc: *TokenConsumer) ?Idx {
+    if (tc.takeChar('[')) |i| return i;
+    if (tc.takeChar(']')) |i| return i;
+    if (tc.takeChar('/')) |i| return i;
+    if (tc.takeChar('?')) |i| return i;
+    if (tc.takeChar(':')) |i| return i;
+    if (tc.takeChar('+')) |i| return i;
+    if (tc.takeChar('$')) |i| return i;
+    return null;
+}
+
+fn uriHeaderCharOnce(tc: *TokenConsumer) bool {
+    if (hnvUnreserved(tc) != null) return true;
+    if (uriUnreserved(tc) != null) return true;
+    if (escaped(tc) != null) return true;
+    return false;
+}
+
+// hname = 1*( hnv-unreserved / unreserved / escaped )
+fn uriHname(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    if (!uriHeaderCharOnce(tc)) return null;
+    while (uriHeaderCharOnce(tc)) {}
+    return cp.commit();
+}
+
+// hvalue = *( hnv-unreserved / unreserved / escaped )
+fn uriHvalue(tc: *TokenConsumer) Range {
+    var cp = tc.checkpoint();
+    while (uriHeaderCharOnce(tc)) {}
+    return cp.commit();
+}
+
+// headers = "?" header *( "&" header )
+fn uriHeaders(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = tc.takeChar('?') orelse return null;
+    _ = uriHname(tc) orelse return null;
+    _ = tc.takeChar('=') orelse return null;
+    _ = uriHvalue(tc);
+    while (true) {
+        var iter_cp = tc.checkpoint();
+        defer iter_cp.restore();
+        _ = tc.takeChar('&') orelse break;
+        _ = uriHname(tc) orelse break;
+        _ = tc.takeChar('=') orelse break;
+        _ = uriHvalue(tc);
+        _ = iter_cp.commit();
+    }
+    return cp.commit();
+}
+
+// SIP-URI = "sip:" [ userinfo ] hostport uri-parameters [ headers ]
+fn sipUri(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = tc.takeString("sip:") orelse return null;
+    var up = tc.checkpoint();
+    defer up.restore();
+    if (sipUserinfo(tc) != null) _ = up.commit();
+    _ = hostport(tc) orelse return null;
+    _ = uriParameters(tc);
+    _ = uriHeaders(tc);
+    return cp.commit();
+}
+
+// SIPS-URI = "sips:" [ userinfo ] hostport uri-parameters [ headers ]
+fn sipsUri(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = tc.takeString("sips:") orelse return null;
+    var up = tc.checkpoint();
+    defer up.restore();
+    if (sipUserinfo(tc) != null) _ = up.commit();
+    _ = hostport(tc) orelse return null;
+    _ = uriParameters(tc);
+    _ = uriHeaders(tc);
+    return cp.commit();
+}
+
+// scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
+fn uriScheme(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = parse.alpha(tc) orelse return null;
+    while (true) {
+        if (parse.alpha(tc) != null) continue;
+        if (parse.digit(tc) != null) continue;
+        if (tc.takeChar('+') != null) continue;
+        if (tc.takeChar('-') != null) continue;
+        if (tc.takeChar('.') != null) continue;
+        break;
+    }
+    return cp.commit();
+}
+
+// uric = reserved / unreserved / escaped
+fn uricOnce(tc: *TokenConsumer) bool {
+    if (uriUnreserved(tc) != null) return true;
+    if (escaped(tc) != null) return true;
+    // reserved chars
+    if (tc.takeChar(';') != null) return true;
+    if (tc.takeChar('/') != null) return true;
+    if (tc.takeChar('?') != null) return true;
+    if (tc.takeChar(':') != null) return true;
+    if (tc.takeChar('@') != null) return true;
+    if (tc.takeChar('&') != null) return true;
+    if (tc.takeChar('=') != null) return true;
+    if (tc.takeChar('+') != null) return true;
+    if (tc.takeChar('$') != null) return true;
+    if (tc.takeChar(',') != null) return true;
+    return false;
+}
+
+// absoluteURI = scheme ":" ( hier-part / opaque-part )
+// Simplified: consume all uric chars after "scheme:"
+fn absoluteUri(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = uriScheme(tc) orelse return null;
+    _ = tc.takeChar(':') orelse return null;
+    while (uricOnce(tc)) {}
+    return cp.commit();
+}
+
+// addr-spec = SIP-URI / SIPS-URI / absoluteURI
+fn addrSpec(tc: *TokenConsumer) ?Range {
+    if (sipsUri(tc)) |r| return r;
+    if (sipUri(tc)) |r| return r;
+    if (absoluteUri(tc)) |r| return r;
+    return null;
+}
+
+// Bare addr-spec (outside angle brackets): SIP/SIPS URI without uri-parameters,
+// since semicolons in that context belong to the enclosing header's param list.
+fn sipUriBare(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = tc.takeString("sip:") orelse return null;
+    var up = tc.checkpoint();
+    defer up.restore();
+    if (sipUserinfo(tc) != null) _ = up.commit();
+    _ = hostport(tc) orelse return null;
+    return cp.commit();
+}
+
+fn sipsUriBare(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = tc.takeString("sips:") orelse return null;
+    var up = tc.checkpoint();
+    defer up.restore();
+    if (sipUserinfo(tc) != null) _ = up.commit();
+    _ = hostport(tc) orelse return null;
+    return cp.commit();
+}
+
+fn addrSpecBare(tc: *TokenConsumer) ?Range {
+    if (sipsUriBare(tc)) |r| return r;
+    if (sipUriBare(tc)) |r| return r;
+    if (absoluteUri(tc)) |r| return r;
+    return null;
+}
+
+// display-name = *(token LWS) / quoted-string
+fn displayName(tc: *TokenConsumer) ?Range {
+    if (quotedString(tc)) |r| return r;
+    var cp = tc.checkpoint();
+    while (true) {
+        var iter_cp = tc.checkpoint();
+        defer iter_cp.restore();
+        _ = token(tc) orelse break;
+        _ = lws(tc) orelse break;
+        _ = iter_cp.commit();
+    }
+    return cp.commit();
+}
+
+// LAQUOT = SWS "<"
+fn laquot(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = sws(tc);
+    _ = tc.takeChar('<') orelse return null;
+    return cp.commit();
+}
+
+// RAQUOT = ">" SWS
+fn raquot(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = tc.takeChar('>') orelse return null;
+    _ = sws(tc);
+    return cp.commit();
+}
+
+// name-addr = [ display-name ] LAQUOT addr-spec RAQUOT
+fn nameAddr(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = displayName(tc);
+    _ = laquot(tc) orelse return null;
+    _ = addrSpec(tc) orelse return null;
+    _ = raquot(tc) orelse return null;
+    return cp.commit();
+}
+
+// tag-param = "tag" EQUAL token  (returns the tag value range)
+fn tagParam(tc: *TokenConsumer) ?Range {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+    _ = tc.takeString("tag") orelse return null;
+    _ = equal(tc) orelse return null;
+    const val = token(tc) orelse return null;
+    _ = cp.commit();
+    return val;
+}
+
+const FromParam = union(enum) {
+    tag: Range,
+    generic: GenericParam,
 };
 
-pub fn fromSpec(tc: *TokenConsumer) FromSpec {
-    const from = tc.takeWhileNoneOf(";\r");
+fn fromParam(tc: *TokenConsumer) ?FromParam {
+    if (tagParam(tc)) |r| return .{ .tag = r };
+    if (genericParam(tc)) |p| return .{ .generic = p };
+    return null;
+}
 
-    var params: ?Range = null;
-    if (tc.takeChar(';')) |_| {
-        params = tc.takeWhileNoneOf("\r");
-        // Seek till end of line
+pub const FromSpec = struct {
+    from: Range,
+    tag: ?Range,
+};
+
+// from-spec = ( name-addr / addr-spec ) *( SEMI from-param )
+pub fn fromSpec(tc: *TokenConsumer) ?FromSpec {
+    var cp = tc.checkpoint();
+    defer cp.restore();
+
+    const from = nameAddr(tc)
+        orelse addrSpecBare(tc)
+        orelse return null;
+
+    var tag: ?Range = null;
+    while (true) {
+        var iter_cp = tc.checkpoint();
+        defer iter_cp.restore();
+        _ = semi(tc) orelse break;
+        const param = fromParam(tc) orelse break;
+        switch (param) {
+            .tag => |r| tag = r,
+            .generic => {},
+        }
+        _ = iter_cp.commit();
     }
 
-    return .{
-        .from = from,
-        .params = params,
-    };
+    _ = cp.commit();
+    return .{ .from = from, .tag = tag };
+}
+
+test "fromSpec bare sip uri" {
+    const buf = "sip:alice@atlanta.com";
+    var tc = TokenConsumer.init(buf);
+    const fs = fromSpec(&tc) orelse return error.ParseFailed;
+    try std.testing.expectEqualStrings(buf, fs.from.data(buf));
+    try std.testing.expectEqual(null, fs.tag);
+}
+
+test "fromSpec bare sip uri with tag" {
+    const buf = "sip:alice@atlanta.com;tag=1234";
+    var tc = TokenConsumer.init(buf);
+    const fs = fromSpec(&tc) orelse return error.ParseFailed;
+    try std.testing.expectEqualStrings("sip:alice@atlanta.com", fs.from.data(buf));
+    try std.testing.expectEqualStrings("1234", fs.tag.?.data(buf));
+}
+
+test "fromSpec name-addr with tag" {
+    const buf = "Alice <sip:alice@atlanta.com>;tag=1928301774";
+    var tc = TokenConsumer.init(buf);
+    const fs = fromSpec(&tc) orelse return error.ParseFailed;
+    try std.testing.expectEqualStrings("Alice <sip:alice@atlanta.com>", fs.from.data(buf));
+    const tag = fs.tag orelse return error.NoTag;
+    try std.testing.expectEqualStrings("1928301774", tag.data(buf));
+}
+
+test "fromSpec display-name quoted-string" {
+    const buf = "\"Bob\" <sip:bob@biloxi.com>;tag=xyz";
+    var tc = TokenConsumer.init(buf);
+    const fs = fromSpec(&tc) orelse return error.ParseFailed;
+    try std.testing.expectEqualStrings("\"Bob\" <sip:bob@biloxi.com>", fs.from.data(buf));
+    const tag = fs.tag orelse return error.NoTag;
+    try std.testing.expectEqualStrings("xyz", tag.data(buf));
+}
+
+test "fromSpec anonymous" {
+    const buf = "<sip:anonymous@atlanta.com>";
+    var tc = TokenConsumer.init(buf);
+    const fs = fromSpec(&tc) orelse return error.ParseFailed;
+    try std.testing.expectEqualStrings(buf, fs.from.data(buf));
+    try std.testing.expectEqual(null, fs.tag);
 }
 
 const StartLine = union(enum) {

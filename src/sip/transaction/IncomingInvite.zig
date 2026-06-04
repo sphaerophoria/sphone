@@ -28,8 +28,9 @@ pub fn init(arena: std.mem.Allocator, message: []const u8) !IncomingInvite {
         switch (h.key) {
             .from => {
                 var tc2 = parse.TokenConsumer.init(h.val);
-                const from_spec = sip_parse.fromSpec(&tc2);
-                from = try arena.dupe(u8, from_spec.from.data(h.val));
+                if (sip_parse.fromSpec(&tc2)) |from_spec| {
+                    from = try arena.dupe(u8, from_spec.from.data(h.val));
+                }
             },
             else => {},
         }
