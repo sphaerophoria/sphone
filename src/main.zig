@@ -46,21 +46,8 @@ const Ids = struct {
 
 const ids = Ids.init();
 
-// Gui request of gui thread
-const GuiAction = union(enum) {
-    start_call,
-    edit_call_recipiant: sphtud.ui.textbox.TextboxNotifier,
-
-    pub fn makeEditCallRecipiant(notifier: sphtud.ui.textbox.TextboxNotifier) GuiAction {
-        return .{
-            .edit_call_recipiant = notifier,
-        };
-    }
-};
-
 // Gui thread request of main thread
-// FIXME: Surely needs a better name
-const GuiThreadAction = union(enum) {
+const GuiAction = union(enum) {
     start_call: struct {
         buf: [128]u8,
         len: usize,
@@ -78,10 +65,10 @@ const GuiState = struct {
             in_call,
         },
 
-        action_queue: sphtud.util.CircularBuffer(GuiThreadAction),
+        action_queue: sphtud.util.CircularBuffer(GuiAction),
     },
 
-    pub fn popAction(self: *GuiState) !?GuiThreadAction {
+    pub fn popAction(self: *GuiState) !?GuiAction {
         try self.mutex.lock(self.io.io());
         defer self.mutex.unlock(self.io.io());
 
@@ -157,7 +144,7 @@ pub fn uiMain(gui_state: *GuiState) !void {
                 try gui_state.mutex.lock(std_io);
                 defer gui_state.mutex.unlock(std_io);
 
-                var thread_action = GuiThreadAction{
+                var thread_action = GuiAction{
                     .start_call = undefined,
                 };
 
@@ -228,7 +215,7 @@ pub fn main() !void {
         ids.rtp,
     );
 
-    var gui_action_queue_buf: [32]GuiThreadAction = undefined;
+    var gui_action_queue_buf: [32]GuiAction = undefined;
     var gui_state = GuiState{
         .mutex = .init,
         .io = .init_single_threaded,
