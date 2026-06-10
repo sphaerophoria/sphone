@@ -39,7 +39,7 @@ pub fn onMessage(
             if (self.timer_handle) |h| try parent.timer.rearm(h, duration) else self.timer_handle = try parent.timer.add(duration, on_timeout);
         },
         .send => |buf| try parent.transport.sendResponse(sender.?, buf),
-        .accepted => return .accepted
+        .accepted => return .accepted,
     };
 
     return .none;

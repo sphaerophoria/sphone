@@ -1229,9 +1229,7 @@ pub fn fromSpec(tc: *TokenConsumer) ?FromSpec {
     var cp = tc.checkpoint();
     defer cp.restore();
 
-    const from = nameAddr(tc)
-        orelse addrSpecBare(tc)
-        orelse return null;
+    const from = nameAddr(tc) orelse addrSpecBare(tc) orelse return null;
 
     var tag: ?Range = null;
     while (true) {

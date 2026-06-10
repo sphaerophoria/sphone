@@ -101,7 +101,7 @@ pub fn uiMain(gui_state: *GuiState) !void {
         .{},
     );
 
-    const widget_factory = sphtud.ui.WidgetFactory {
+    const widget_factory = sphtud.ui.WidgetFactory{
         .alloc = gui_alloc,
         .state = widget_state,
     };
